@@ -1,0 +1,39 @@
+# 16-GPU layout on Perlmutter (4 nodes). Nodes 1-2 as in cluster_8gpu.yaml, plus:
+#   Nodes 3-4: turbo LLM (Llama 3.1 405B, AWQ 4-bit, ~203 GiB), TP=4 inside each node, PP=2 across
+#   the two nodes over Slingshot, on a Ray cluster spanning both. Served from node 3.
+deadline_s: 1.0
+max_wait_s: 4.0
+asr_snr_threshold_db: 10.0
+filler_mode: ${FILLER_MODE}  # bank, or generated once the fine-tuned router is served
+max_tokens: 200
+request_timeout_s: 90
+
+rag:
+  kind: ${RAG_KIND}  # faiss, or none for the RAG-off run (E2)
+  index_dir: ${DATA_DIR}/rag_index
+  k: 3
+
+services:
+  asr_small: ["http://${NODE1}:9001", "http://${NODE1}:9003"]
+  asr_large: ["http://${NODE1}:9002", "http://${NODE1}:9004"]
+  tts: ["http://${NODE1}:9011", "http://${NODE1}:9012", "http://${NODE1}:9013"]
+  llm_small:
+    model: ${LLM_SMALL}
+    router_model: ${LLM_ROUTER}
+    urls: ["http://${NODE1}:8001", "http://${NODE1}:8002", "http://${NODE1}:8003"]
+  llm_large:
+    model: ${LLM_LARGE}
+    urls: ["http://${NODE2}:8100"]
+  llm_turbo:
+    model: ${LLM_TURBO}
+    urls: ["http://${NODE3}:8200"]
+
+# Placeholder guesses until calibration; replace with the output of
+#   python -m voiceagent.analysis.calibrate logs/run-<id>/always_*.jsonl --out configs/latency_16gpu.json
+latency:
+  asr_small: {base_s: 0.15, per_inflight_s: 0.01}
+  asr_large: {base_s: 0.50, per_inflight_s: 0.03}
+  llm_small_first_sentence: {base_s: 0.30, per_inflight_s: 0.01}
+  llm_large_first_sentence: {base_s: 0.90, per_inflight_s: 0.03}
+  llm_turbo_first_sentence: {base_s: 1.60, per_inflight_s: 0.05}
+  tts: {base_s: 0.15, per_inflight_s: 0.02}

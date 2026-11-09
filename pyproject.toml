@@ -1,0 +1,26 @@
+[project]
+name = "voiceagent"
+version = "0.1.0"
+description = "Latency-aware model selection for a distributed medical voice agent (Team Stoat)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "httpx", "pyyaml"]
+
+[project.optional-dependencies]
+serve = ["fastapi", "uvicorn"]
+asr = ["faster-whisper"]
+tts = ["kokoro", "soundfile"]
+rag = ["faiss-cpu", "sentence-transformers"]
+eval = ["jiwer"]
+train = ["torch", "transformers", "peft"]
+plots = ["matplotlib"]
+dev = ["pytest", "fastapi", "uvicorn", "matplotlib"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["voiceagent*", "servers*", "training*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

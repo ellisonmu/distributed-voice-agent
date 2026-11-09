@@ -1,0 +1,38 @@
+# Local development against servers/mock.py (see scripts/run_local_mock.sh).
+deadline_s: 1.0
+max_wait_s: 4.0
+asr_snr_threshold_db: 10.0
+filler_mode: bank
+max_tokens: 200
+request_timeout_s: 30
+
+rag:
+  kind: static
+  k: 2
+  passages:
+    - title: Asthma
+      text: Asthma is a chronic disease that affects your airways. Symptoms include wheezing, coughing, chest tightness and shortness of breath.
+    - title: Asthma in adults
+      text: Adult-onset asthma is asthma that is diagnosed after age 20. A doctor can help you make an asthma action plan.
+
+services:
+  asr_small: [http://127.0.0.1:9101, http://127.0.0.1:9103]
+  asr_large: [http://127.0.0.1:9102]
+  tts: [http://127.0.0.1:9111, http://127.0.0.1:9112]
+  llm_small:
+    model: mock-small
+    urls: [http://127.0.0.1:9201, http://127.0.0.1:9202]
+  llm_large:
+    model: mock-large
+    urls: [http://127.0.0.1:9301]
+  llm_turbo:
+    model: mock-turbo
+    urls: [http://127.0.0.1:9401]
+
+latency:
+  llm_turbo_first_sentence: {base_s: 1.40, per_inflight_s: 0.05}
+  asr_small: {base_s: 0.05, per_inflight_s: 0.005}
+  asr_large: {base_s: 0.25, per_inflight_s: 0.02}
+  llm_small_first_sentence: {base_s: 0.30, per_inflight_s: 0.01}
+  llm_large_first_sentence: {base_s: 0.90, per_inflight_s: 0.03}
+  tts: {base_s: 0.08, per_inflight_s: 0.01}
