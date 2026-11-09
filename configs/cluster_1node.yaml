@@ -1,0 +1,38 @@
+# One-node test (slurm/smoke_1node.sbatch): node 1's services only. There is no 70B on this
+# node, so the "large" tier points at the 8B replicas as a stand-in; escalations still exercise
+# the filler and hand-off code, but large-vs-small numbers from this config mean nothing.
+# Static passages, so the test doesn't depend on the RAG index existing yet.
+deadline_s: 1.0
+max_wait_s: 4.0
+asr_snr_threshold_db: 10.0
+filler_mode: ${FILLER_MODE}
+max_tokens: 200
+request_timeout_s: 60
+
+rag:
+  kind: static
+  k: 2
+  passages:
+    - title: Asthma
+      text: Asthma is a chronic disease that affects your airways. Symptoms include wheezing, coughing, chest tightness and shortness of breath.
+    - title: High blood pressure
+      text: High blood pressure is a common condition. Treatment can include lifestyle changes and medicines your doctor prescribes.
+
+services:
+  asr_small: ["http://${NODE1}:9001", "http://${NODE1}:9003"]
+  asr_large: ["http://${NODE1}:9002", "http://${NODE1}:9004"]
+  tts: ["http://${NODE1}:9011", "http://${NODE1}:9012", "http://${NODE1}:9013"]
+  llm_small:
+    model: ${LLM_SMALL}
+    router_model: ${LLM_ROUTER}
+    urls: ["http://${NODE1}:8001", "http://${NODE1}:8002", "http://${NODE1}:8003"]
+  llm_large:
+    model: ${LLM_SMALL}
+    urls: ["http://${NODE1}:8001", "http://${NODE1}:8002", "http://${NODE1}:8003"]
+
+latency:
+  asr_small: {base_s: 0.15, per_inflight_s: 0.01}
+  asr_large: {base_s: 0.50, per_inflight_s: 0.03}
+  llm_small_first_sentence: {base_s: 0.30, per_inflight_s: 0.01}
+  llm_large_first_sentence: {base_s: 0.30, per_inflight_s: 0.01}
+  tts: {base_s: 0.15, per_inflight_s: 0.02}
