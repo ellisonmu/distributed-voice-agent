@@ -15,6 +15,12 @@ caller WAV ─► blind SNR estimate ─► ASR small|large ─► RAG (FAISS, C
 
 Animated version: open [docs/pipeline-diagram.html](docs/pipeline-diagram.html) in a browser.
 
+## Resources
+ - **Llama-3.1-8B** https://huggingface.co/meta-llama/Llama-3.1-8B
+ - **Llama-3.3-70B** https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct
+ - **Llama-3.1-405B** https://huggingface.co/meta-llama/Llama-3.1-405B
+ - **MedQuAD** https://github.com/abachaa/MedQuAD/tree/master
+
 ## Layout
 
 | Path | What | Stream |
