@@ -1,11 +1,13 @@
 """One row per run (policy, N): latency percentiles, deadline hit rates, throughput, routing
-rates and ASR WER. Then capacity per policy: the largest N whose p95 TTFA meets each deadline."""
+rates and ASR WER. Then capacity per policy: the largest N whose p95 TTFA meets each deadline.
+Optional --asr-out writes WER grouped by run, ASR model and injected noise level."""
 from __future__ import annotations
 
 import argparse
 import csv
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +15,11 @@ import numpy as np
 from voiceagent.analysis.common import load_run, measured_turns
 
 DEADLINES = (0.6, 1.0, 1.2)
+ASR_COLUMNS = (
+    "run_id", "policy", "n", "asr_model", "noise_condition", "snr_db", "turns",
+    "scored_turns", "reference_words", "substitutions", "deletions", "insertions",
+    "wer", "est_snr_p50",
+)
 
 
 def _normalize(text: str) -> str:
@@ -32,6 +39,53 @@ def _wer(refs: list[str], hyps: list[str]) -> float | None:
 
 def _pct(values: list[float], q: float) -> float | None:
     return float(np.percentile(values, q)) if values else None
+
+
+def summarize_asr(meta: dict, records: list[dict]) -> list[dict]:
+    """WER per run, ASR model and injected SNR, using successful measured turns.
+
+    snr_db=None means clean; an absent field is unknown. Estimated SNR is reported
+    separately and is never used as the ground-truth noise label. Empty references
+    are excluded consistently with the overall WER; empty hypotheses count as errors.
+    """
+    try:
+        from jiwer import process_words
+    except ImportError as exc:
+        raise RuntimeError(
+            "ASR breakdown requires jiwer; install with python -m pip install -e '.[eval]'"
+        ) from exc
+
+    groups = defaultdict(list)
+    for rec in measured_turns(meta, records):
+        if rec["error"] is not None:
+            continue
+        snr = rec.get("snr_db")
+        condition = (
+            "unknown" if "snr_db" not in rec else "clean" if snr is None else f"{snr:g}dB"
+        )
+        groups[(rec["asr_model"], condition)].append(rec)
+
+    rows = []
+    for (model, condition), turns in groups.items():
+        pairs = [(_normalize(r["question_text"]), _normalize(r["transcript"])) for r in turns]
+        pairs = [(ref, hyp) for ref, hyp in pairs if ref]
+        result = process_words([ref for ref, _ in pairs], [hyp for _, hyp in pairs]) if pairs else None
+        estimates = [r["est_snr_db"] for r in turns if r.get("est_snr_db") is not None]
+        rows.append({
+            "run_id": meta["run_id"], "policy": meta["policy"], "n": meta["n_callers"],
+            "asr_model": model, "noise_condition": condition, "snr_db": turns[0].get("snr_db"),
+            "turns": len(turns), "scored_turns": len(pairs),
+            "reference_words": sum(len(ref.split()) for ref, _ in pairs),
+            "substitutions": result.substitutions if result else 0,
+            "deletions": result.deletions if result else 0,
+            "insertions": result.insertions if result else 0,
+            "wer": float(result.wer) if result else None,
+            "est_snr_p50": _pct(estimates, 50),
+        })
+    return sorted(rows, key=lambda r: (
+        r["asr_model"], r["noise_condition"] != "clean",
+        r["snr_db"] if r["snr_db"] is not None else float("inf"),
+    ))
 
 
 def summarize_run(meta: dict, records: list[dict], judgments: dict[str, dict] | None = None) -> dict:
@@ -101,11 +155,22 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("runs", nargs="+", help="run .jsonl files written by voiceagent.loadgen")
     p.add_argument("--out", help="write the table as CSV here")
+    p.add_argument("--asr-out", help="write WER by ASR model and injected SNR as CSV (requires jiwer)")
     p.add_argument("--judgments", help="output of `voiceagent.analysis.judge grade`, adds quality columns")
     a = p.parse_args()
     paths = [x for x in a.runs if not x.endswith(".meta.json")]
+    if not paths:
+        p.error("provide at least one run .jsonl file")
     judgments = load_judgments(a.judgments) if a.judgments else None
-    rows = sorted((summarize_run(*load_run(x), judgments) for x in paths), key=lambda r: (r["policy"], r["n"]))
+    runs = [load_run(x) for x in paths]
+    rows = sorted((summarize_run(meta, records, judgments) for meta, records in runs),
+                  key=lambda r: (r["policy"], r["n"]))
+    asr_rows = []
+    if a.asr_out:
+        try:
+            asr_rows = [row for meta, records in runs for row in summarize_asr(meta, records)]
+        except RuntimeError as exc:
+            p.error(str(exc))
     cols = ["policy", "n", "turns", "errors", "turns_per_min", "ttfa_p50", "ttfa_p95", "ttfa_p99",
             "ttsa_p50", "ttsa_p95", "ttfa_le_1.0", "stalled", "llm_small", "llm_large", "llm_turbo", "hedged",
             "asr_large", "wer", "quality", "unsafe"]
@@ -123,6 +188,13 @@ def main() -> None:
             w.writeheader()
             w.writerows(rows)
         print(f"\nwrote {a.out}", file=sys.stderr)
+    if a.asr_out:
+        Path(a.asr_out).parent.mkdir(parents=True, exist_ok=True)
+        with open(a.asr_out, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=ASR_COLUMNS)
+            w.writeheader()
+            w.writerows(asr_rows)
+        print(f"wrote {a.asr_out}", file=sys.stderr)
 
 
 if __name__ == "__main__":
