@@ -35,6 +35,10 @@ def play(delays, durations, gap_before=None):
 def test_buffered_clips_have_no_gap():
     player, _ = play(delays=[0.01, 0.01], durations=[0.3, 0.3])
     assert player.gaps == []
+    first, second = player.clips
+    assert first.playback_start == first.ready
+    assert second.playback_start == first.playback_start + first.duration
+    assert second.playback_start > second.ready
 
 
 def test_late_sentence_creates_a_measured_gap():
@@ -42,3 +46,4 @@ def test_late_sentence_creates_a_measured_gap():
     player, end = play(delays=[0.01, 0.01], durations=[0.1, 0.1], gap_before=0.4)
     assert len(player.gaps) == 1 and 0.25 < player.gaps[0] < 0.4
     assert end > 0.45
+    assert player.clips[1].playback_start == player.clips[1].ready
