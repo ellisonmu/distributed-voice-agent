@@ -48,9 +48,9 @@ Animated version: open [docs/pipeline-diagram.html](docs/pipeline-diagram.html) 
 ## Run locally (no GPU)
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev,eval]'
 .venv/bin/pip install -e '.[train]'                 # optional: torch/transformers/peft for the training tests
-.venv/bin/python -m pytest -q                       # 43 tests, ~1 min: every policy and tier end to end, judge,
+.venv/bin/python -m pytest -q                       # every policy and tier end to end, judge, ASR summaries,
                                                     # dataset builder, DDP and FSDP on CPU, plots, configs
 PYTHON=.venv/bin/python scripts/run_local_mock.sh   # mock servers + sweep + summary table + calibration
 ```
@@ -183,9 +183,24 @@ the first `WARMUP` seconds are dropped.
 - **Quality vs. latency** (the main figure): one point per (policy, N), judge quality against
   p95 TTFA.
 - **Routing mix vs. N:** how the adaptive policy shifts between tiers as load rises.
-- **Gap:** WER is currently one number per run. Setting the ASR switch threshold (E1) needs
-  WER by noise level (clean / 20 / 10 / 5 / 0 dB) for Whisper small and large separately; each
-  turn's log already has its SNR and ASR model, so this is a small addition to `summarize`.
+- **ASR breakdown (E1):** `summarize --asr-out` writes one row per run, ASR model and
+  injected noise level (clean / 20 / 10 / 5 / 0 dB). Only successful turns starting in the
+  measurement window are included, matching the overall WER. WER is total substitutions,
+  deletions and insertions divided by total reference words, rather than a mean of per-turn
+  WERs. The CSV includes turn counts, scored turns, reference words, error counts and median
+  estimated SNR. Empty references are excluded from scoring; empty transcripts count as
+  deletions. Missing noise labels are `unknown`, distinct from clean audio.
+
+```bash
+python -m voiceagent.analysis.summarize logs/run-<id>/*_n*.jsonl \
+    --out logs/run-<id>/summary.csv --asr-out logs/run-<id>/asr_by_snr.csv
+```
+
+Install the `eval` extra for this report. Compare always-small and always-large runs with
+the same evaluation set and load: adaptive runs select different audio for each ASR model,
+so their rows alone are not a controlled small-vs-large comparison. Grouping uses injected
+SNR for evaluation; the live scheduler continues to use blind estimated SNR. Real E1 runs
+and validation against estimated SNR are still needed to choose the switching threshold.
 
 ## How the router is trained
 
@@ -296,7 +311,7 @@ with usable label counts.
 
 **5. System evaluation** (steps 5 and 6). Done when every figure in the report exists.
 - [ ] E1 calibration and fitting the latency model; WER by noise level per Whisper size
-      (still to build in `summarize`) to set the ASR switch threshold
+      (`summarize --asr-out`) to set the ASR switch threshold from real runs
 - [ ] E4 main sweep, then E2, E3, E5, E6
 - [ ] Judge every run; hand-check 50 rows (kappa); figures
 - [ ] E5 "small LLM 1 vs. 2 replicas" still needs a config with fewer `llm_small` URLs
