@@ -6,3 +6,4 @@ __pycache__/
 /data/
 /figures/
 slurm/env.sh
+.DS_Store
