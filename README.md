@@ -196,7 +196,28 @@ remains unchanged so related XML files with a shared document ID stay in the sam
 Thomas ran the updated parser and split-audit fixtures on macOS with Python 3.14.6 and
 pytest 9.2.0: **26 passed in 0.10 s**. The command was
 `.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-source-key-fix.xml`;
-the XML log is local and not committed. The next real Perlmutter rebuild/audit is pending.
+the XML log is local and not committed.
+
+The real Perlmutter `medquad-v3` rebuild **passed with 0 errors** using the source-file/pair
+keys. It retained all 14,344 prepared QA pairs and the same split sizes:
+
+| Split | Valid QA pairs | Document groups |
+|---|---:|---:|
+| finetune | 10,838 | 4,052 |
+| dev | 1,002 | 404 |
+| eval | 2,504 | 915 |
+
+The audit found no duplicate question IDs or normalized questions within splits and no
+question-ID, question-text or document-group overlap across splits. Shared focus-label
+warnings remain 51/164/17 for finetune-dev/finetune-eval/dev-eval. These are integrity checks,
+not measurements of ASR accuracy, retrieval relevance or answer quality.
+
+The validated data is at `/pscratch/sd/y/ycw71/voiceagent-data/task2-LaJrsN/medquad-v3/`.
+Its audit is `manifests/medquad-validation-v3.json`, with execution logs in
+`logs/{prepare,validate}-medquad-v3.log` under the same snapshot root. The code revision
+was recorded in `manifests/medquad-v3-code-commit.txt`; the fix pushed for this run was
+`371cc32`. The original `medquad/` and `medquad-v2/` are failed attempts retained for evidence;
+consumers must explicitly use `medquad-v3/` until a validated handoff layout is established.
 
 Keep both failed audits as evidence; rebuild into a new output directory and use new
 log/report paths. Do not mix old caller audio, distillation records or judgments with the
@@ -261,6 +282,94 @@ disease. Exact text checks also do not detect paraphrases. Keep this limitation 
 do not describe the current split as a topic-held-out benchmark.
 
 ### B. MedlinePlus retrieval index
+
+Source preparation completed on Perlmutter: `raw/mplus_topics_2026-11-13.xml` downloaded
+successfully (about 29 MB), with SHA-256
+`895f6ec17a32ad051db55248656446f164b1d9a47475103bffa79e17288231d2`.
+Its source URL, download timestamp and checksum are recorded in
+`manifests/medlineplus-{source-url,downloaded-utc,sha256}.txt`; `mplus-paths.sh` restores
+`MPLUS_XML`. BGE model files were also cached successfully under `$SCRATCH/hf` at revision
+`5c38ec7c405ec4b44b94cc5a9bb96e735b38267a`, recorded in `manifests/bge-snapshot.json`.
+
+GPU execution and the index build subsequently succeeded in allocation `61462525` on
+`nid200325`, using an NVIDIA A100-SXM4-80GB, PyTorch `2.15.0+cu132` and CUDA build 13.2.
+The CUDA tensor check passed. The builder ran with `--device cuda`, 250-word chunks and
+50-word overlap, producing **2,047 vectors of dimension 384**. The saved FAISS vector count,
+passage-row count and metadata count agree; the inner-product index type and embedding
+dimension checks passed. Evidence is in `logs/rag-build-61462525.log`,
+`logs/rag-check-61462525.log` and `manifests/rag-validation.json` under the data snapshot.
+
+Ten dev questions sampled with seed 0 each returned three nonempty passages with finite
+scores. Several titles directly matched the query (for example, Volcanoes, Cancer
+Chemotherapy and Myelodysplastic Syndromes), while others did not: the Lynch syndrome
+query returned Myasthenia Gravis first, and Anonychia congenita returned Ataxia
+Telangiectasia first. This establishes a working retrieval pipeline, not adequate relevance.
+The saved report retains full passage text for human review. Corpus coverage and relevance
+need investigation before the index is accepted; no retrieval-accuracy percentage or
+answer-quality improvement has been measured. Similarity scores are not correctness probabilities.
+
+A login-node keyword inspection was saved as `manifests/rag-keyword-coverage.json`:
+
+| Keyword | English XML records mentioning it | Indexed chunks mentioning it |
+|---|---:|---:|
+| epidermolysis bullosa | 3 | 1 |
+| anonychia | 1 | 0 |
+| lynch | 5 | 4 |
+| rapadilino | 2 | 0 |
+| ornithine transcarbamylase | 3 | 0 |
+| glomerular | 6 | 1 |
+| hemochromatosis | 8 | 4 |
+
+The XML scan includes metadata, link titles and URLs, whereas the current builder indexes
+only title + full summary. A raw XML mention therefore does not establish that explanatory
+passage text is available to retrieval. Three inspected rare-condition keywords were absent
+from indexed passages. Lynch appeared in four chunks but did not occur in the top-three
+retrieved titles for its sampled dev question; passage suitability and ranking both need review.
+These keyword counts are diagnostic observations, not corpus recall or retrieval accuracy.
+
+Next candidate: add the complete official [MedlinePlus Genetics XML
+compendium](https://medlineplus.gov/about/developers/geneticsdatafilesapi/) as another
+source, with its own snapshot/checksum. Keep the 2,047-chunk index as the baseline and build
+any expanded corpus into a separate directory. Use the full public source and fixed dev
+probes to investigate coverage; record its relationship to MedQuAD's source material in any
+evaluation.
+
+The Genetics download subsequently succeeded: `raw/ghr-summaries.xml` is about 7.7 MB,
+with SHA-256 `ba7afc4590afa2caf2ac907bbabf414f70281da11315a342f63d6e682dc7122c`.
+HTTP headers, source URL, timestamp and checksum are saved in `manifests/genetics-*`;
+`genetics-paths.sh` restores `GENETICS_XML`. Inspection of this actual file found namespace
+`https://medlineplus.gov/download/ghr-summaries-20250602.xsd`, 1,305 health-condition records,
+1,507 genes, 24 chromosomes and one mitochondrial-DNA record. These are XML record counts,
+not generated passage counts.
+
+`scripts/rag/build_index.py --genetics-xml` now optionally adds all four record types.
+The parser handles the XML namespace and both nested and escaped HTML, chunks each
+`text-list/text/html` section independently, and retains the section role, source URL,
+record ID, source filename and synonyms. The embedding context includes the section title
+and up to eight synonyms. Link listings and database pointers are not substituted for
+missing narrative text. No MedQuAD questions or reference answers are inputs to this builder.
+The standard Health Topic summaries remain included, with their original embedding text
+format. Metadata now includes source hashes and per-corpus chunk counts, and the builder
+refuses an existing output directory. Thomas ran the Genetics corpus, MedQuAD parser and
+split-audit fixture tests on macOS with Python 3.14.6 and pytest 9.2.0:
+**47 passed in 0.13 s**. The command was
+`.venv/bin/python -m pytest tests/test_rag_corpus.py tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-genetics-parser.xml`;
+the XML log is local and not committed. Parsing of the real snapshot with the new code,
+the expanded-index build and relevance comparison are still pending.
+
+After fixture tests and real XML preparation pass, build a separate candidate on a
+compute node using the same model and chunk settings:
+
+```bash
+python scripts/rag/build_index.py --mplus-xml "$MPLUS_XML" \
+    --genetics-xml "$GENETICS_XML" --out-dir "$DATA_DIR/rag_index_genetics" \
+    --model BAAI/bge-small-en-v1.5 --chunk-words 250 --overlap 50 --device cuda
+```
+
+Compare the saved baseline dev probes with the same questions and top-k on the candidate,
+checking actual passage relevance and source coverage. Keep eval references out of tuning.
+Do not claim improved retrieval or answer quality until the comparison has been run and
+reviewed; adding more source text alone is not a measured improvement.
 
 Download a dated **Health Topic XML** snapshot from the [official MedlinePlus XML
 page](https://medlineplus.gov/xml.html), not the Health Topic Group XML. Record its exact
@@ -330,9 +439,10 @@ Task 3 consumes `medquad/finetune.jsonl` and `rag_index/`; system evaluation con
 environments, caches or model weights. Preserve important artifacts in approved persistent
 storage: Perlmutter scratch is temporary storage.
 
-- [x] Updated parser and split-audit fixture tests: 26 passed; command and local log path recorded above.
-- [ ] Real MedQuAD split audit passes on Perlmutter; record counts/revisions/hashes.
-- [ ] Real MedlinePlus index checks and dev retrieval review complete.
+- [x] Local Genetics corpus, MedQuAD parser and split-audit fixture tests: 47 passed; command and local log path recorded above.
+- [x] Real MedQuAD v3 split audit passes on Perlmutter: 14,344 valid rows, 0 errors; counts and evidence paths recorded above, hashes in the JSON audit.
+- [x] Real MedlinePlus index built and integrity checked: 2,047 vectors, dimension 384; ten dev retrieval probes saved.
+- [ ] Review corpus coverage and passage relevance, including the mismatched dev examples.
 - [ ] Clean pilot checked; noise source and full caller audio checked.
 - [ ] Team can read the frozen snapshot and reproduce preparation from its manifest.
 
