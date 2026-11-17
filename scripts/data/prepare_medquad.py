@@ -4,8 +4,9 @@ Input: a clone of https://github.com/abachaa/MedQuAD (folders of XML files, one 
 per file). Subsets whose answers were removed for copyright are skipped automatically,
 since their <Answer> elements are empty.
 
-Splits are by document, so all questions about one topic (e.g. one disease) land in the
-same split and no topic leaks from fine-tuning into evaluation."""
+Splits are by source document: every question from that document stays together.
+Different documents may cover the same disease or topic, so this does not guarantee
+a topic-held-out evaluation. Audit the outputs with voiceagent.analysis.validate_medquad."""
 from __future__ import annotations
 
 import argparse

@@ -76,14 +76,9 @@ mkdir -p logs
 Download the 405B (~203 GiB) to `$HF_HOME` on `$SCRATCH` early; it takes a while.
 
 ### 2. Data (needs: setup)
-```bash
-git clone https://github.com/abachaa/MedQuAD $DATA_DIR/MedQuAD-src
-python scripts/data/prepare_medquad.py --medquad-dir $DATA_DIR/MedQuAD-src --out-dir $DATA_DIR/medquad
-python scripts/rag/build_index.py --mplus-xml <mplus_topics_*.xml> --out-dir $DATA_DIR/rag_index
-# needs a running TTS server (servers/tts_server.py) and a noise set such as MUSAN's noise/ folder
-python scripts/data/make_caller_audio.py --split $DATA_DIR/medquad/eval.jsonl --out-dir $DATA_DIR/eval \
-    --tts-url http://<node>:9011 --noise-dir <noise wavs>
-```
+See [Task 2: Data and RAG](#task-2-data-and-rag) for ownership, source snapshots,
+commands and acceptance checks. MedQuAD preparation can proceed alongside cluster
+bring-up; caller audio needs a working TTS endpoint from that work.
 
 ### 3. Bring-up (needs: setup; data optional)
 ```bash
@@ -148,6 +143,162 @@ python -m voiceagent.analysis.judge agreement logs/run-<id>/handcheck.csv
 python -m voiceagent.analysis.plots --summary logs/run-<id>/summary.csv --out-dir figures \
     --train-runs $SCRATCH/router-ddp $SCRATCH/router-fsdp
 ```
+
+## Task 2: Data and RAG
+
+**Owner: Thomas Wei.** Prepare the reference QA splits, retrieval corpus and caller audio
+used by router training and system evaluation. This work does not require the 405B server.
+Coordinate with the cluster owner for a TTS endpoint and with the team for the final shared
+data location. Personal scratch paths may not be readable by every teammate.
+
+### Deliverables and evidence
+
+| Artifact under `$DATA_DIR` | Purpose | Acceptance evidence |
+|---|---|---|
+| `medquad/{finetune,dev,eval}.jsonl` | Answered QA pairs, separated by source document | Split audit passes; actual row/document counts, hashes and source revision recorded |
+| `rag_index/{index.faiss,chunks.jsonl,meta.json}` | MedlinePlus passages and bge-small retrieval index | FAISS vector count, chunk count and metadata agree; inspect retrieval for 10 dev questions |
+| `eval/eval.jsonl` and its `audio/*.wav` | Caller questions with clean/noisy audio | References and question IDs preserved; every relative path resolves; WAVs readable as 16 kHz mono PCM16 |
+| `manifests/` and `logs/` | Reproduce the data snapshot and preparation | Source URLs/revisions, SHA-256 hashes, seed, commands, package versions and real execution logs |
+
+Implementation and execution are tracked separately. Thomas ran the split audit's 18 fixture
+tests on macOS with Python 3.14.6 and pytest 9.2.0: **18 passed in 0.10 s**. The command was
+`.venv/bin/python -m pytest tests/test_validate_medquad.py -v --junitxml=logs/task2-validation.xml`;
+the XML log is local and not committed. All real dataset/index/audio acceptance checks remain
+pending. These fixture tests do not show that artifacts have been produced on Perlmutter.
+
+### A. MedQuAD snapshot and split audit
+
+Use a fresh versioned directory. The preparation and audio scripts can overwrite files in
+their output directories, so preserve completed snapshots and use a new path for a rebuild.
+The following is intended for the Perlmutter **login node**: lightweight source download and
+XML/JSON preparation only. Do not run model embedding or TTS inference there.
+
+```bash
+cd "$SCRATCH/distributed-voice-agent"
+module load cray-python/3.12.12
+source .venv/bin/activate
+export HF_HOME="$SCRATCH/hf"
+export PIP_CACHE_DIR="$SCRATCH/voiceagent-cache/pip"
+export DATA_DIR="$SCRATCH/voiceagent-data/task2-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$DATA_DIR/raw" "$DATA_DIR/manifests" "$DATA_DIR/logs"
+printf 'export DATA_DIR=%q\n' "$DATA_DIR" > "$DATA_DIR/paths.sh"
+git rev-parse HEAD > "$DATA_DIR/manifests/code-commit.txt"
+git status --short > "$DATA_DIR/manifests/code-status.txt"
+python -m pip freeze > "$DATA_DIR/manifests/packages.txt"
+git clone https://github.com/abachaa/MedQuAD.git "$DATA_DIR/raw/MedQuAD-src"
+git -C "$DATA_DIR/raw/MedQuAD-src" rev-parse HEAD > "$DATA_DIR/manifests/medquad-commit.txt"
+```
+
+Confirm the source download and recorded revision before preparing data. Reuse the printed
+`DATA_DIR` on later logins by sourcing its `paths.sh`; do not recreate a new timestamp each
+time you resume the same snapshot. The existing `.venv` is reused rather than reinstalled.
+
+```bash
+set -o pipefail
+python scripts/data/prepare_medquad.py \
+    --medquad-dir "$DATA_DIR/raw/MedQuAD-src" --out-dir "$DATA_DIR/medquad" \
+    --seed 0 --eval-size 2500 --dev-size 1000 \
+    2>&1 | tee "$DATA_DIR/logs/prepare-medquad.log"
+python -m voiceagent.analysis.validate_medquad \
+    --data-dir "$DATA_DIR/medquad" \
+    --source-commit "$(cat "$DATA_DIR/manifests/medquad-commit.txt")" \
+    --out "$DATA_DIR/manifests/medquad-validation.json" \
+    2>&1 | tee "$DATA_DIR/logs/validate-medquad.log"
+```
+
+The splitter skips empty answers and deduplicates questions. Whole-document assignment can
+overshoot the requested dev/eval sizes; record actual counts rather than assuming exact
+sizes. The usable answered subset is smaller than the original MedQuAD collection because
+some upstream subsets have no answer text. Follow the [upstream source and citation
+instructions](https://github.com/abachaa/MedQuAD).
+
+The audit checks nonempty string IDs/questions/answers/document IDs, malformed rows, empty
+splits, duplicate question IDs and normalized question text, and document/question overlap
+between splits. It writes a JSON report even on validation failure, exits nonzero on errors,
+and records split hashes and source/qtype counts. It refuses to replace an existing report
+unless `--overwrite` is explicit, and never allows the report to replace a split file.
+Stop on failure and inspect the report before using the data for training or evaluation.
+
+Shared disease/topic `focus` labels are reported as warnings. A document-disjoint split
+does **not** guarantee topic isolation: multiple source documents can discuss the same
+disease. Exact text checks also do not detect paraphrases. Keep this limitation in the report;
+do not describe the current split as a topic-held-out benchmark.
+
+### B. MedlinePlus retrieval index
+
+Download a dated **Health Topic XML** snapshot from the [official MedlinePlus XML
+page](https://medlineplus.gov/xml.html), not the Health Topic Group XML. Record its exact
+URL, download date and SHA-256 in `manifests/`. Keep the XML in `raw/`. Choose the snapshot
+explicitly: the upstream download listing changes over time.
+
+Cache [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) using the
+same `HF_HOME` during login-node setup, recording the downloaded model revision. This public
+embedding model is separate from the gated Llama models. Run the embedding/index build in a
+**compute-node allocation**, after confirming the input XML and model cache are ready:
+
+```bash
+# Compute node only. Set MPLUS_XML to the downloaded Health Topic XML's full path.
+python scripts/rag/build_index.py --mplus-xml "$MPLUS_XML" \
+    --out-dir "$DATA_DIR/rag_index" --model BAAI/bge-small-en-v1.5 \
+    --chunk-words 250 --overlap 50 --device cuda
+```
+
+The existing builder keeps English topics, embeds title + passage, normalizes vectors and
+uses FAISS inner-product search. Before handoff, verify `index.ntotal` equals the number of
+rows in `chunks.jsonl` and `meta.json`'s `chunks`. Record vector dimension and index/model
+settings. Inspect top-3 passages for 10 **dev** questions and save question IDs, titles,
+scores and relevance notes. Do not tune retrieval using eval reference answers. A successful
+index build is infrastructure evidence; it is not a measured answer-quality improvement.
+
+### C. Caller audio and noise
+
+Obtain the TTS endpoint from the cluster owner; model serving/inference belongs on allocated
+compute nodes. Start with 10 clean questions in a separate pilot directory, then inspect
+their audio and metadata before the full build:
+
+```bash
+# With the allocated TTS service reachable; TTS_URL is its http://host:port URL.
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad/eval.jsonl" \
+    --out-dir "$DATA_DIR/eval-pilot" --tts-url "$TTS_URL" \
+    --snrs clean --limit 10 --concurrency 2 --seed 0
+```
+
+Agree on a noise corpus/subset before downloading it. [MUSAN](https://www.openslr.org/17/)
+is one option; its full archive is about 11 GB and also contains speech/music, so coordinate
+reuse and select the `noise/` WAVs rather than treating all files as background noise.
+Record the corpus license, source, subset and hashes. Once the pilot passes and `NOISE_DIR`
+points to the chosen noise WAVs, run audio preparation from an allocated compute node:
+
+```bash
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad/eval.jsonl" \
+    --out-dir "$DATA_DIR/eval" --tts-url "$TTS_URL" --noise-dir "$NOISE_DIR" \
+    --snrs clean,20,10,5,0 --seed 0
+```
+
+The current generator assigns **one** condition per question in round-robin order; it does
+not produce all five SNRs for every question. Clean rows have `snr_db: null`. Record actual
+counts by injected SNR and voice. Keep these assignments and the generated WAVs fixed across
+policy comparisons. A seed alone does not establish byte-identical TTS outputs.
+
+Check every manifest path and WAV format, and compare question IDs/text/reference answers
+with the source eval split. Listen to a small sample from every condition. Record the TTS
+model/voice settings and noise selection. Audio generation validates the input pipeline;
+Whisper WER and system latency still require their own real evaluation runs.
+
+### D. Team handoff and status
+
+Give the team the agreed readable `$DATA_DIR`, artifact counts, validation logs and source
+manifest. Set `DATA_DIR` in each consumer's ignored `slurm/env.sh` to that snapshot.
+Task 3 consumes `medquad/finetune.jsonl` and `rag_index/`; system evaluation consumes
+`eval/eval.jsonl` and the same index. Commit code and documentation, not raw datasets,
+environments, caches or model weights. Preserve important artifacts in approved persistent
+storage: Perlmutter scratch is temporary storage.
+
+- [x] Local split-audit fixture tests: 18 passed; command and local log path recorded above.
+- [ ] Real MedQuAD split audit passes on Perlmutter; record counts/revisions/hashes.
+- [ ] Real MedlinePlus index checks and dev retrieval review complete.
+- [ ] Clean pilot checked; noise source and full caller audio checked.
+- [ ] Team can read the frozen snapshot and reproduce preparation from its manifest.
 
 ## What the evaluation measures
 
@@ -295,9 +446,12 @@ all three tiers answering.
 - [ ] `turbo_2node.sbatch`: 405B serves with TP=4 × PP=2; NCCL uses Slingshot, not sockets
 - [ ] `run_8gpu.sbatch`, then the first short `run_16gpu.sbatch`
 
-**2. Data and RAG** (step 2). Done when `$DATA_DIR/eval/eval.jsonl` and the RAG index exist.
-- [ ] MedQuAD splits; MedlinePlus FAISS index
-- [ ] Pick a noise set; synthesize and noise-mix caller audio
+**2. Data and RAG — Thomas Wei** (step 2; [detailed plan](#task-2-data-and-rag)). Done when
+the reference splits, index and caller audio pass the documented checks and are shared.
+- [ ] MedQuAD splits and integrity audit; record source revision and actual counts
+- [ ] MedlinePlus FAISS index and dev retrieval review
+- [ ] Noise selection, clean audio pilot, full caller audio and manifest checks
+- [ ] Reproducible artifact manifest and team handoff
 
 **3. Router dataset** (step 4, `distill.sbatch`). Done when `train.jsonl` / `val.jsonl` exist
 with usable label counts.
