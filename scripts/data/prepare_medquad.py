@@ -32,7 +32,7 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
         doc_id = f"{xml_path.parent.name}/{root.get('id', xml_path.stem)}"
         source = root.get("source", xml_path.parent.name)
         focus = (root.findtext("Focus") or "").strip()
-        for pair in root.iter("QAPair"):
+        for pair_index, pair in enumerate(root.iter("QAPair"), 1):
             q_el, a_el = pair.find("Question"), pair.find("Answer")
             if q_el is None or a_el is None:
                 continue
@@ -41,8 +41,13 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
             if not question or not answer or question.lower() in seen:
                 continue
             seen.add(question.lower())
+            # Upstream qids repeat across source collections. Qualify them with
+            # the document namespace before downstream code uses them as keys.
+            source_question_id = (q_el.get("qid") or "").strip() or None
+            local_id = source_question_id or f"pair-{pair.get('pid') or pair_index}"
             docs.setdefault(doc_id, []).append({
-                "question_id": q_el.get("qid") or f"{doc_id}-{pair.get('pid')}",
+                "question_id": f"{doc_id}/{local_id}",
+                "source_question_id": source_question_id,
                 "question": question,
                 "answer": answer,
                 "qtype": q_el.get("qtype", "unknown"),

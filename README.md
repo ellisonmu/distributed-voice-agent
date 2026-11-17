@@ -166,6 +166,27 @@ tests on macOS with Python 3.14.6 and pytest 9.2.0: **18 passed in 0.10 s**. The
 the XML log is local and not committed. All real dataset/index/audio acceptance checks remain
 pending. These fixture tests do not show that artifacts have been produced on Perlmutter.
 
+The first real MedQuAD preparation ran on Perlmutter with source revision
+`577bd37b96c02d1833b2c9eed2de9f96964e96cb` and seed 0. It produced 14,344 answered
+QA pairs from 5,371 documents: finetune 10,838/4,052 documents, dev 1,002/404 documents,
+and eval 2,504/915 documents. The audit **failed** on six duplicate/overlapping question-ID
+checks; it reported no document or normalized-question overlap. Shared focus labels were
+51 (finetune/dev), 164 (finetune/eval) and 17 (dev/eval).
+
+The parser had treated upstream `qid` values as globally unique, but different collections
+reuse them (for example, [GHR](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/3_GHR_QA/0000001.xml)
+and [NIDDK](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/5_NIDDK_QA/0000001.xml)).
+Prepared `question_id` values now include `doc_id` as a namespace, while
+`source_question_id` preserves the original `qid` (null when absent). Missing IDs fall back
+to the pair ID or its position in the document. This changes reference keys without changing
+the splitting algorithm. Thomas reran the parser regression and split-audit fixtures on
+macOS with Python 3.14.6 and pytest 9.2.0: **24 passed in 0.09 s**. The command was
+`.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-id-fix.xml`;
+the XML log is local and not committed. A real Perlmutter rebuild/audit is still pending.
+Keep the first failed audit as evidence; rebuild into a new output directory and use new
+log/report paths. Do not mix old caller audio, distillation records or judgments with the
+new question IDs.
+
 ### A. MedQuAD snapshot and split audit
 
 Use a fresh versioned directory. The preparation and audio scripts can overwrite files in
@@ -294,7 +315,7 @@ Task 3 consumes `medquad/finetune.jsonl` and `rag_index/`; system evaluation con
 environments, caches or model weights. Preserve important artifacts in approved persistent
 storage: Perlmutter scratch is temporary storage.
 
-- [x] Local split-audit fixture tests: 18 passed; command and local log path recorded above.
+- [x] Local parser and split-audit fixture tests: 24 passed after the ID fix; command and local log path recorded above.
 - [ ] Real MedQuAD split audit passes on Perlmutter; record counts/revisions/hashes.
 - [ ] Real MedlinePlus index checks and dev retrieval review complete.
 - [ ] Clean pilot checked; noise source and full caller audio checked.
