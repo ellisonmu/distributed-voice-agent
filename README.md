@@ -19,6 +19,9 @@ Animated version: open [docs/pipeline-diagram.html](docs/pipeline-diagram.html) 
  - **Llama-3.1-8B-Instruct** https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct (30GB)
  - **Llama-3.3-70b-instruct-awq** https://huggingface.co/casperhansen/llama-3.3-70b-instruct-awq (38GB) 
  - **Meta-Llama-3.1-405B-Instruct-AWQ-INT4** https://huggingface.co/hugging-quants/Meta-Llama-3.1-405B-Instruct-AWQ-INT4 (205GB)
+ - **Whisper-small** from faster_whisper
+ - **Whisper-large-v3** from faster_whisper
+ - **kokoro**
  - **MedQuAD** https://github.com/abachaa/MedQuAD/tree/master 
 
 ## Layout
