@@ -438,8 +438,40 @@ Existing narrative passages remain unchanged when this mode is enabled, and the 
 narrative-only mode remains available. Thomas ran the corpus, MedQuAD parser and split-audit
 fixtures on macOS with Python 3.14.6 and pytest 9.2.0: **54 passed in 0.14 s**. The command was
 `.venv/bin/python -m pytest tests/test_rag_corpus.py tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-genetics-metadata.xml`;
-the XML log is local and not committed. Real metadata preparation and a separate
-index/retrieval comparison are still pending execution.
+the XML log is local and not committed.
+
+Real metadata preparation on Perlmutter with code `a01e129` subsequently **passed**:
+8,227 total chunks (2,047 Health Topic and 6,180 Genetics), with 5,689 preserved narrative
+chunks, 1,305 inheritance-pattern metadata chunks and 1,233 related-gene metadata chunks.
+Both XML source hashes match the previous snapshots. The saved RAPADILINO metadata
+includes the publisher's `Autosomal recessive` label and `RECQL4` entry, and the
+hemochromatosis metadata retains both inheritance labels and all five listed genes.
+Evidence is in `manifests/rag-metadata-preflight.json` and
+`logs/rag-metadata-preflight.log`, with the code SHA in
+`manifests/rag-metadata-preflight-code-commit.txt`.
+
+The metadata-enabled index subsequently built successfully in allocation `61466521` on
+`nid200261`: **8,227 vectors of dimension 384**. Integrity checks passed against preparation
+counts, source manifests, metadata mode, model/query prefix, index metric and model
+dimension. Evidence is in `logs/rag-metadata-build-61466521.log`,
+`logs/rag-metadata-check-61466521.log` and `manifests/rag-metadata-comparison.json`.
+
+Slurm accounting confirmed allocation `61466521` and both job steps **COMPLETED** with
+exit code `0:0`. The allocation elapsed time was 00:08:09; index-build step `.0` took
+00:00:41 and integrity/retrieval-check step `.1` took 00:00:11. These are job-step wall
+times including their setup/loading work, not isolated encoder latency or a system
+serving benchmark. The allocation has been released.
+
+The same ten dev questions were compared across all three saved indexes. RAPADILINO's
+inheritance question now retrieves the publisher's `Autosomal recessive` metadata first,
+and hereditary hemochromatosis retrieves both listed inheritance labels first. The latter
+is a list of possible patterns, not a per-gene/subtype mapping. The Lynch treatment query
+still lacks answering evidence, and the ornithine transcarbamylase query retrieves other
+conditions' related-gene metadata. The epidermolysis acquisita and broad glomerular
+queries also retain the earlier limitations. These fields improve support for the two
+observed inheritance probes but do not establish overall retrieval or answer accuracy.
+The [passage review](docs/task2-retrieval-review.md) records the three-way findings.
+Human confirmation and broader validation remain pending.
 
 After validation, use a new output directory for this candidate:
 

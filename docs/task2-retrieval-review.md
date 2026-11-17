@@ -45,8 +45,28 @@ An optional `--include-genetics-metadata` parser mode has been added locally to 
 publisher's labels and associations as separate source-metadata passages. Code-only labels
 are not guessed, multiple patterns are preserved, and gene lists are not turned into
 specific-variant claims. Thomas's local corpus/parser/audit fixture suite passed all 54 tests
-in 0.14 s (`logs/task2-genetics-metadata.xml`). Real preparation and a separate comparison
-for this mode are still pending; these changes do not alter the narrative-only results above.
+in 0.14 s (`logs/task2-genetics-metadata.xml`), followed by successful real preparation.
+The narrative-only results above remain preserved.
+
+## Metadata-enabled comparison
+
+The third index built in allocation `61466521` with 8,227 vectors of dimension 384 and
+passed its integrity checks. `manifests/rag-metadata-comparison.json` stores all three
+indexes' passages for the same ten dev questions. The pasted comparison provides these
+qualitative findings; the full new report has not been independently human graded.
+
+| Query | Metadata-enabled result | Support assessment |
+|---|---|---|
+| RAPADILINO inheritance | Inheritance-pattern metadata ranks first; its excerpt contains the publisher's Autosomal recessive label | Supplies the previously omitted inheritance evidence for this probe |
+| Hereditary hemochromatosis inheritance | Inheritance-pattern metadata ranks first and lists Autosomal recessive and Autosomal dominant | Supports reporting the source's listed patterns; no per-gene/subtype mapping is established |
+| Lynch syndrome treatments | Myasthenia Gravis stays first; Lynch related-gene metadata is second and its description third | Gene associations and the retrieved description do not supply treatment evidence |
+| Ornithine transcarbamylase deficiency genetic changes | Other conditions' related-gene metadata now occupies top-3 | The requested condition remains unsupported despite higher similarity scores |
+| Epidermolysis bullosa acquisita | The same three differently named epidermolysis conditions remain | The earlier exact-condition support problem remains |
+| Other probes | Volcanoes, Anonychia, Glomerular Diseases, Chemotherapy and MDS retain their displayed Genetics-only top-3 titles and scores | Preserve the earlier per-question assessments |
+
+This diagnoses a source-extraction omission and demonstrates its effect on two specific
+development probes. The same queries guided corpus changes, so these findings are not
+held-out performance or a general accuracy estimate.
 
 Keep both frozen indexes and the original comparison report. Any parser/retriever change
 needs its own output directory and comparison. Human review, broader validation and the
