@@ -71,8 +71,11 @@ variables. Each step below says what it needs from the steps before it. A 4-node
 ```bash
 cp slurm/env.example.sh slurm/env.sh                # set account, paths, model names
 module load python
-python -m venv $SCRATCH/envs/voiceagent && $SCRATCH/envs/voiceagent/bin/pip install -e '.[serve,asr,tts,rag,eval,train,plots]'
-python -m venv $SCRATCH/envs/vllm && $SCRATCH/envs/vllm/bin/pip install vllm
+# Python 3.12, not the module's default 3.13: Kokoro (TTS) doesn't support 3.13 yet
+conda create -y -p $SCRATCH/envs/voiceagent python=3.12
+$SCRATCH/envs/voiceagent/bin/pip install -e '.[serve,asr,tts,rag,eval,train,plots]'
+conda create -y -p $SCRATCH/envs/vllm python=3.12
+$SCRATCH/envs/vllm/bin/pip install vllm
 huggingface-cli login                               # Llama weights are gated: accept the license on HF first
 mkdir -p logs
 ```
