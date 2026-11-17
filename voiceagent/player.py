@@ -18,6 +18,7 @@ class Clip:
     text: str
     ready: float
     duration: float
+    playback_start: float | None = None  # simulated playback start, set by finish()
 
 
 class Player:
@@ -48,8 +49,8 @@ class Player:
 
     async def finish(self) -> float:
         """Waits for all synthesis and returns when the caller hears the last clip end.
-        Afterwards self.gaps holds every silence between clips (the next clip wasn't ready
-        when the previous one finished playing)."""
+        Afterwards each clip has its playback_start set, and self.gaps holds every silence
+        between clips (the next clip wasn't ready when the previous one finished playing)."""
         self.queue.put_nowait(None)
         await self.worker
         end = None
@@ -61,6 +62,7 @@ class Player:
                 if clip.ready > end:
                     self.gaps.append(clip.ready - end)
                 start = max(clip.ready, end)
+            clip.playback_start = start
             end = start + clip.duration
         return end if end is not None else self.clock()
 

@@ -151,3 +151,32 @@ def test_calibration_fits_every_stage(tmp_path, eval_set):
     small, large, turbo = (params[f"llm_{s}_first_sentence"]["base_s"] for s in ("small", "large", "turbo"))
     assert small < large < turbo
     json.dumps(params)
+
+
+def test_ttsa_waits_for_filler_playback(tmp_path, eval_set, monkeypatch):
+    from voiceagent.filler import FillerBank
+
+    filler_duration = 2.0
+    monkeypatch.setattr(
+        FillerBank,
+        "pick",
+        lambda self: ("One moment while I check.", filler_duration),
+    )
+
+    _, records = run(
+        tmp_path, eval_set, "adaptive", n=1, p_escalate=1.0
+    )
+
+    for rec in records:
+        assert rec["route"] == "escalate_large"
+        assert rec["filler_text"] == "One moment while I check."
+
+        filler_end = rec["t_first_audio"] + filler_duration
+        assert rec["t_first_answer_audio"] >= filler_end, (
+            "Answer playback cannot start before filler ends: "
+            f"answer={rec['t_first_answer_audio']:.3f}, "
+            f"filler_end={filler_end:.3f}"
+        )
+        assert rec["ttsa"] == pytest.approx(
+            rec["t_first_answer_audio"] - rec["t_start"]
+        )

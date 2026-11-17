@@ -86,7 +86,9 @@ class Orchestrator:
             rec.ttfa = rec.t_first_audio - rec.t_start
             answer_clips = [c for c in player.clips if c.kind == "answer"]
             if answer_clips:
-                rec.t_first_answer_audio = answer_clips[0].ready
+                # finish() includes any earlier filler in the playback timeline.
+                rec.t_first_answer_audio = answer_clips[0].playback_start
+                assert rec.t_first_answer_audio is not None
                 rec.ttsa = rec.t_first_answer_audio - rec.t_start
 
     async def _routed_turn(self, rec: TurnRecord, passages: list[Passage], player: Player) -> None:
