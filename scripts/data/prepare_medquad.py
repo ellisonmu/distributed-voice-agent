@@ -29,6 +29,7 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
     seen: set[str] = set()
     for xml_path in sorted(medquad_dir.rglob("*.xml")):
         root = ET.parse(xml_path).getroot()
+        source_file = xml_path.relative_to(medquad_dir).as_posix()
         doc_id = f"{xml_path.parent.name}/{root.get('id', xml_path.stem)}"
         source = root.get("source", xml_path.parent.name)
         focus = (root.findtext("Focus") or "").strip()
@@ -41,13 +42,14 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
             if not question or not answer or question.lower() in seen:
                 continue
             seen.add(question.lower())
-            # Upstream qids repeat across source collections. Qualify them with
-            # the document namespace before downstream code uses them as keys.
+            # Both Document IDs and qids can repeat in different XML files;
+            # qids/pids are not required for a unique, traceable reference key.
             source_question_id = (q_el.get("qid") or "").strip() or None
-            local_id = source_question_id or f"pair-{pair.get('pid') or pair_index}"
             docs.setdefault(doc_id, []).append({
-                "question_id": f"{doc_id}/{local_id}",
+                "question_id": f"{source_file}#pair-{pair_index}",
                 "source_question_id": source_question_id,
+                "source_file": source_file,
+                "source_pair_index": pair_index,
                 "question": question,
                 "answer": answer,
                 "qtype": q_el.get("qtype", "unknown"),

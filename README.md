@@ -176,14 +176,29 @@ checks; it reported no document or normalized-question overlap. Shared focus lab
 The parser had treated upstream `qid` values as globally unique, but different collections
 reuse them (for example, [GHR](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/3_GHR_QA/0000001.xml)
 and [NIDDK](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/5_NIDDK_QA/0000001.xml)).
-Prepared `question_id` values now include `doc_id` as a namespace, while
-`source_question_id` preserves the original `qid` (null when absent). Missing IDs fall back
-to the pair ID or its position in the document. This changes reference keys without changing
-the splitting algorithm. Thomas reran the parser regression and split-audit fixtures on
+The first fix added `doc_id` as a question-ID namespace. Thomas reran the parser regression and split-audit fixtures on
 macOS with Python 3.14.6 and pytest 9.2.0: **24 passed in 0.09 s**. The command was
 `.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-id-fix.xml`;
-the XML log is local and not committed. A real Perlmutter rebuild/audit is still pending.
-Keep the first failed audit as evidence; rebuild into a new output directory and use new
+the XML log is local and not committed. The real `medquad-v2` rebuild retained the same
+row/document counts and focus warnings, and passed the cross-split ID checks, but its audit
+still **failed**: eval contained eight duplicated question-ID values. Some CancerGov XML
+files reuse both document IDs and question IDs, for example
+[`0000013_2.xml`](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/1_CancerGov_QA/0000013_2.xml)
+and [`0000013_2_1.xml`](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/1_CancerGov_QA/0000013_2_1.xml).
+
+Prepared question IDs now use `<relative XML path>#pair-<1-based XML pair position>`.
+They do not rely on upstream IDs being unique. `source_file`, `source_pair_index` and
+`source_question_id` retain the source location and original `qid` (null when absent).
+Positions are assigned before filtering, so dropping a question does not renumber later
+questions. IDs are reproducible for the recorded source revision regardless of checkout
+location; editing/reordering source XML can change them. The original `doc_id` grouping
+remains unchanged so related XML files with a shared document ID stay in the same split.
+Thomas ran the updated parser and split-audit fixtures on macOS with Python 3.14.6 and
+pytest 9.2.0: **26 passed in 0.10 s**. The command was
+`.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-source-key-fix.xml`;
+the XML log is local and not committed. The next real Perlmutter rebuild/audit is pending.
+
+Keep both failed audits as evidence; rebuild into a new output directory and use new
 log/report paths. Do not mix old caller audio, distillation records or judgments with the
 new question IDs.
 
@@ -315,7 +330,7 @@ Task 3 consumes `medquad/finetune.jsonl` and `rag_index/`; system evaluation con
 environments, caches or model weights. Preserve important artifacts in approved persistent
 storage: Perlmutter scratch is temporary storage.
 
-- [x] Local parser and split-audit fixture tests: 24 passed after the ID fix; command and local log path recorded above.
+- [x] Updated parser and split-audit fixture tests: 26 passed; command and local log path recorded above.
 - [ ] Real MedQuAD split audit passes on Perlmutter; record counts/revisions/hashes.
 - [ ] Real MedlinePlus index checks and dev retrieval review complete.
 - [ ] Clean pilot checked; noise source and full caller audio checked.
