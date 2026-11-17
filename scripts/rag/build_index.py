@@ -68,7 +68,44 @@ def health_topic_chunks(path: Path, size: int, overlap: int) -> list[dict]:
 GENETICS_TYPES = {"health-condition-summary", "gene-summary", "chromosome-summary", "mtdna-summary"}
 
 
-def genetics_chunks(path: Path, size: int, overlap: int) -> list[dict]:
+def _genetics_metadata_sections(record: ET.Element, name: str) -> list[dict]:
+    """Expose publisher labels and associations without inferring variant effects."""
+    sections, patterns, genes = [], [], []
+    pattern_list = _child(record, "inheritance-pattern-list")
+    if pattern_list is not None:
+        for pattern in pattern_list:
+            if _local_name(pattern.tag) == "inheritance-pattern":
+                patterns.append({"code": _text(_child(pattern, "code")),
+                                 "memo": _text(_child(pattern, "memo"))})
+    labels = list(dict.fromkeys(p["memo"] for p in patterns if p["memo"]))
+    if labels:
+        sections.append({
+            "role": "inheritance patterns",
+            "text": f"MedlinePlus Genetics lists these inheritance patterns for {name}: "
+                    + "; ".join(labels) + ".",
+            "details": {"inheritance_patterns": patterns},
+        })
+    gene_list = _child(record, "related-gene-list")
+    if gene_list is not None:
+        for gene in gene_list:
+            if _local_name(gene.tag) != "related-gene":
+                continue
+            symbol = _text(_child(gene, "gene-symbol"))
+            if symbol:
+                genes.append({"symbol": symbol, "url": _text(_child(gene, "ghr-page"))})
+    if genes:
+        symbols = list(dict.fromkeys(g["symbol"] for g in genes))
+        sections.append({
+            "role": "related genes",
+            "text": f"MedlinePlus Genetics lists these related genes for {name}: "
+                    + "; ".join(symbols)
+                    + ". This metadata lists gene associations, not specific mutations or variant effects.",
+            "details": {"related_genes": genes},
+        })
+    return sections
+
+
+def genetics_chunks(path: Path, size: int, overlap: int, *, include_metadata: bool = False) -> list[dict]:
     root = ET.parse(path).getroot()
     if _local_name(root.tag) != "summaries":
         raise ValueError("expected the Genetics summaries compendium XML")
@@ -90,9 +127,7 @@ def genetics_chunks(path: Path, size: int, overlap: int) -> list[dict]:
             if (text := _text(child))
         ]
         sections = _child(record, "text-list")
-        if sections is None:
-            continue
-        for section in sections:
+        for section in (sections if sections is not None else []):
             if _local_name(section.tag) != "text":
                 continue
             role = _text(_child(section, "text-role"))
@@ -102,18 +137,33 @@ def genetics_chunks(path: Path, size: int, overlap: int) -> list[dict]:
                                "text": part, "url": url, "corpus": "genetics",
                                "source_file": path.name, "record_id": record.get("id"),
                                "record_type": kind, "section": role, "synonyms": synonyms})
+        if include_metadata:
+            for section in _genetics_metadata_sections(record, name):
+                role = section["role"]
+                for part in chunk_words(section["text"], size, overlap):
+                    chunks.append({
+                        "title": f"{title} ({role}; source metadata)", "text": part,
+                        "url": url, "corpus": "genetics", "source_file": path.name,
+                        "record_id": record.get("id"), "record_type": kind,
+                        "section": role, "synonyms": synonyms, "evidence_kind": "source_metadata",
+                        **section["details"],
+                    })
     return chunks
 
 
-def prepare_corpus(mplus_xml: Path, genetics_xml: Path | None, size: int, overlap: int):
+def prepare_corpus(mplus_xml: Path, genetics_xml: Path | None, size: int, overlap: int,
+                   *, include_genetics_metadata: bool = False):
+    if include_genetics_metadata and genetics_xml is None:
+        raise ValueError("Genetics metadata requires --genetics-xml")
     chunks, sources = [], []
     inputs = [(mplus_xml, "health_topics", health_topic_chunks)]
     if genetics_xml is not None:
         inputs.append((genetics_xml, "genetics", genetics_chunks))
     for path, kind, loader in inputs:
-        rows = loader(path, size, overlap)
+        rows = (loader(path, size, overlap, include_metadata=include_genetics_metadata)
+                if kind == "genetics" else loader(path, size, overlap))
         if not rows:
-            raise ValueError(f"no narrative chunks from {path}; check the XML format")
+            raise ValueError(f"no narrative chunks or enabled source metadata from {path}; check the XML format")
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -137,18 +187,23 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mplus-xml", required=True, type=Path)
     p.add_argument("--genetics-xml", type=Path, help="optional ghr-summaries.xml compendium")
+    p.add_argument("--include-genetics-metadata", action="store_true",
+                   help="also index publisher inheritance labels and related-gene associations")
     p.add_argument("--out-dir", required=True, type=Path)
     p.add_argument("--model", default="BAAI/bge-small-en-v1.5")
     p.add_argument("--chunk-words", type=int, default=250)
     p.add_argument("--overlap", type=int, default=50)
     p.add_argument("--device", default="cpu")
     a = p.parse_args()
+    if a.include_genetics_metadata and a.genetics_xml is None:
+        p.error("Genetics metadata requires --genetics-xml")
     if a.chunk_words <= 0 or not 0 <= a.overlap < a.chunk_words:
         p.error("chunk size must be positive and 0 <= overlap < chunk size")
     if a.out_dir.exists() or a.out_dir.is_symlink():
         p.error("output directory already exists; choose a new directory to preserve the old index")
     try:
-        chunks, sources = prepare_corpus(a.mplus_xml, a.genetics_xml, a.chunk_words, a.overlap)
+        chunks, sources = prepare_corpus(a.mplus_xml, a.genetics_xml, a.chunk_words, a.overlap,
+                                         include_genetics_metadata=a.include_genetics_metadata)
     except ValueError as exc:
         p.error(str(exc))
 
@@ -168,7 +223,8 @@ def main() -> None:
             f.write(json.dumps(c) + "\n")
     meta = {"model": a.model, "query_prefix": QUERY_PREFIXES.get(a.model, ""), "chunks": len(chunks),
             "source": a.mplus_xml.name, "sources": sources,
-            "embedding_context": "title, first 8 Genetics synonyms, narrative",
+            "embedding_context": "title, first 8 Genetics synonyms, passage text",
+            "include_genetics_metadata": a.include_genetics_metadata,
             "chunk_words": a.chunk_words, "overlap": a.overlap}
     (a.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"indexed {len(chunks)} chunks into {a.out_dir}")

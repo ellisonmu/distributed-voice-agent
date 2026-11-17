@@ -158,3 +158,96 @@ def test_embedding_context_preserves_default_and_limits_synonyms():
     enriched = dict(plain, synonyms=[f"Alias{i}" for i in range(10)])
     text = build.embedding_text(enriched)
     assert "Alias7" in text and "Alias8" not in text and text.endswith("Narrative.")
+
+
+def add_source_metadata(path, patterns=(("ar", "Autosomal recessive"),),
+                        genes=(("RECQL4", "https://example.org/genetics/recql4"),)):
+    tree = ET.parse(path)
+    root = tree.getroot()
+    prefix = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
+    record = root[0]
+    inheritance = ET.SubElement(record, prefix + "inheritance-pattern-list")
+    for code, memo in patterns:
+        pattern = ET.SubElement(inheritance, prefix + "inheritance-pattern")
+        ET.SubElement(pattern, prefix + "code").text = code
+        ET.SubElement(pattern, prefix + "memo").text = memo
+    related = ET.SubElement(record, prefix + "related-gene-list")
+    for symbol, url in genes:
+        gene = ET.SubElement(related, prefix + "related-gene")
+        ET.SubElement(gene, prefix + "gene-symbol").text = symbol
+        ET.SubElement(gene, prefix + "ghr-page").text = url
+    tree.write(path, encoding="utf-8")
+
+
+def test_metadata_is_opt_in_and_original_narratives_are_preserved(tmp_path):
+    path = genetics_xml(tmp_path / "genetics.xml")
+    add_source_metadata(path)
+    original = build.genetics_chunks(path, 250, 50)
+    expanded = build.genetics_chunks(path, 250, 50, include_metadata=True)
+    assert len(original) == 2 and len(expanded) == 4
+    assert [r for r in expanded if r.get("evidence_kind") != "source_metadata"] == original
+    metadata = [r for r in expanded if r.get("evidence_kind") == "source_metadata"]
+    inheritance = next(r for r in metadata if r["section"] == "inheritance patterns")
+    assert "Autosomal recessive" in inheritance["text"]
+    assert inheritance["inheritance_patterns"] == [{"code": "ar", "memo": "Autosomal recessive"}]
+    assert inheritance["url"] == "https://example.org/genetics/example"
+    assert "source metadata" in inheritance["title"]
+    genes = next(r for r in metadata if r["section"] == "related genes")
+    assert genes["related_genes"] == [{"symbol": "RECQL4", "url": "https://example.org/genetics/recql4"}]
+    assert "not specific mutations or variant effects" in genes["text"]
+
+
+def test_multiple_inheritance_labels_are_not_assigned_to_individual_genes(tmp_path):
+    path = genetics_xml(tmp_path / "genetics.xml")
+    add_source_metadata(path, patterns=(("ar", "Autosomal recessive"), ("ad", "Autosomal dominant")))
+    rows = build.genetics_chunks(path, 250, 50, include_metadata=True)
+    inheritance = next(r for r in rows if r["section"] == "inheritance patterns")
+    assert "Autosomal recessive; Autosomal dominant" in inheritance["text"]
+    assert len(inheritance["inheritance_patterns"]) == 2
+    assert "RECQL4" not in inheritance["text"]
+    related = next(r for r in rows if r["section"] == "related genes")
+    assert "Autosomal" not in related["text"]
+
+
+def test_codes_without_publisher_labels_are_not_translated_or_invented(tmp_path):
+    path = genetics_xml(tmp_path / "genetics.xml")
+    add_source_metadata(path, patterns=(("ar", ""), ("unknown-code", "")), genes=())
+    rows = build.genetics_chunks(path, 250, 50, include_metadata=True)
+    assert len(rows) == 2
+    assert not any(r.get("evidence_kind") == "source_metadata" for r in rows)
+
+
+def test_metadata_can_be_indexed_when_narrative_is_absent_without_fabricating_narrative(tmp_path):
+    path = genetics_xml(tmp_path / "genetics.xml")
+    add_source_metadata(path)
+    tree = ET.parse(path)
+    record = tree.getroot()[0]
+    record.remove(next(c for c in record if c.tag.endswith("}text-list")))
+    tree.write(path, encoding="utf-8")
+    assert build.genetics_chunks(path, 250, 50) == []
+    rows = build.genetics_chunks(path, 250, 50, include_metadata=True)
+    assert len(rows) == 2 and all(r["evidence_kind"] == "source_metadata" for r in rows)
+
+
+def test_metadata_mode_preserves_health_topic_baseline_and_records_new_counts(tmp_path):
+    health, genetics = health_xml(tmp_path / "topics.xml"), genetics_xml(tmp_path / "genetics.xml")
+    add_source_metadata(genetics)
+    original, sources = build.prepare_corpus(health, genetics, 250, 50)
+    expanded, new_sources = build.prepare_corpus(health, genetics, 250, 50, include_genetics_metadata=True)
+    assert expanded[:1] == original[:1]
+    assert [s["chunks"] for s in sources] == [1, 2]
+    assert [s["chunks"] for s in new_sources] == [1, 4]
+    assert sources[1]["sha256"] == new_sources[1]["sha256"]
+
+
+def test_metadata_mode_requires_genetics_input(tmp_path):
+    with pytest.raises(ValueError, match="requires --genetics-xml"):
+        build.prepare_corpus(tmp_path / "unused.xml", None, 250, 50, include_genetics_metadata=True)
+
+
+def test_cli_rejects_metadata_flag_without_genetics_before_model_loading(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["build", "--mplus-xml", "unused.xml", "--out-dir",
+                                     str(tmp_path / "new"), "--include-genetics-metadata"])
+    with pytest.raises(SystemExit) as exc:
+        build.main()
+    assert exc.value.code == 2 and not (tmp_path / "new").exists()
