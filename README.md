@@ -77,8 +77,8 @@ Download the 405B (~203 GiB) to `$HF_HOME` on `$SCRATCH` early; it takes a while
 
 ### 2. Data (needs: setup)
 See [Task 2: Data and RAG](#task-2-data-and-rag) for ownership, source snapshots,
-commands and acceptance checks. MedQuAD preparation can proceed alongside cluster
-bring-up; caller audio needs a working TTS endpoint from that work.
+commands and acceptance checks. MedQuAD preparation and caller audio can proceed alongside
+cluster bring-up; Task 2 used a standalone Kokoro service on one Perlmutter GPU.
 
 ### 3. Bring-up (needs: setup; data optional)
 ```bash
@@ -148,8 +148,8 @@ python -m voiceagent.analysis.plots --summary logs/run-<id>/summary.csv --out-di
 
 **Owner: Thomas Wei.** Prepare the reference QA splits, retrieval corpus and caller audio
 used by router training and system evaluation. This work does not require the 405B server.
-Coordinate with the cluster owner for a TTS endpoint and with the team for the final shared
-data location. Personal scratch paths may not be readable by every teammate.
+Coordinate with the team for the final shared data location. Personal scratch paths may not
+be readable by every teammate.
 
 ### Deliverables and evidence
 
@@ -163,8 +163,8 @@ data location. Personal scratch paths may not be readable by every teammate.
 Implementation and execution are tracked separately. Thomas ran the split audit's 18 fixture
 tests on macOS with Python 3.14.6 and pytest 9.2.0: **18 passed in 0.10 s**. The command was
 `.venv/bin/python -m pytest tests/test_validate_medquad.py -v --junitxml=logs/task2-validation.xml`;
-the XML log is local and not committed. All real dataset/index/audio acceptance checks remain
-pending. These fixture tests do not show that artifacts have been produced on Perlmutter.
+the XML log is local and not committed. Real Perlmutter results for the split, index and
+caller audio are recorded separately below.
 
 The first real MedQuAD preparation ran on Perlmutter with source revision
 `577bd37b96c02d1833b2c9eed2de9f96964e96cb` and seed 0. It produced 14,344 answered
@@ -508,27 +508,28 @@ index build is infrastructure evidence; it is not a measured answer-quality impr
 
 ### C. Caller audio and noise
 
-Obtain the TTS endpoint from the cluster owner; model serving/inference belongs on allocated
-compute nodes. Start with 10 clean questions in a separate pilot directory, then inspect
-their audio and metadata before the full build:
+Use a team TTS endpoint or start `servers.tts_server` on an allocated compute node and
+wait for `/health`. Start with 10 clean questions from the validated `medquad-v3` eval
+split in a separate pilot directory, then inspect their audio and metadata:
 
 ```bash
 # With the allocated TTS service reachable; TTS_URL is its http://host:port URL.
-python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad/eval.jsonl" \
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad-v3/eval.jsonl" \
     --out-dir "$DATA_DIR/eval-pilot" --tts-url "$TTS_URL" \
     --snrs clean --limit 10 --concurrency 2 --seed 0
 ```
 
-Agree on a noise corpus/subset before downloading it. [MUSAN](https://www.openslr.org/17/)
-is one option; its full archive is about 11 GB and also contains speech/music, so coordinate
-reuse and select the `noise/` WAVs rather than treating all files as background noise.
-Record the corpus license, source, subset and hashes. Once the pilot passes and `NOISE_DIR`
-points to the chosen noise WAVs, run audio preparation from an allocated compute node:
+The full build used [DEMAND](https://zenodo.org/records/1227121) by Joachim Thiemann,
+Nobutaka Ito and Emmanuel Vincent (CC BY-SA 3.0): channel 1 of the 16 kHz living-room
+(`DLIVING`), office (`OOFFICE`) and traffic (`STRAFFIC`) archives. The publisher
+archive checksums passed and all three input WAVs passed the job's saved SHA-256 checks.
+Set `NOISE_DIR` to the directory containing those three WAVs. Run generation from an
+allocated compute node with Kokoro already healthy:
 
 ```bash
-python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad/eval.jsonl" \
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad-v3/eval.jsonl" \
     --out-dir "$DATA_DIR/eval" --tts-url "$TTS_URL" --noise-dir "$NOISE_DIR" \
-    --snrs clean,20,10,5,0 --seed 0
+    --snrs clean,20,10,5,0 --concurrency 1 --seed 0
 ```
 
 The current generator assigns **one** condition per question in round-robin order; it does
@@ -536,25 +537,70 @@ not produce all five SNRs for every question. Clean rows have `snr_db: null`. Re
 counts by injected SNR and voice. Keep these assignments and the generated WAVs fixed across
 policy comparisons. A seed alone does not establish byte-identical TTS outputs.
 
-Check every manifest path and WAV format, and compare question IDs/text/reference answers
-with the source eval split. Listen to a small sample from every condition. Record the TTS
-model/voice settings and noise selection. Audio generation validates the input pipeline;
-Whisper WER and system latency still require their own real evaluation runs.
+**Perlmutter evidence.** Kokoro 0.9.4 used the cached `hexgrad/Kokoro-82M` revision
+`f3ff3571791e39611d31c381e3a41a3af07b4987` and five preset voices
+(`af_heart`, `af_bella`, `af_nicole`, `am_adam`, `am_michael`). The clean pilot
+(job `61504677`) passed checks on all 10 WAVs and matching source rows; sampled clips
+sounded clear. The noise pilot (job `61505157`) passed the same format and manifest
+checks, with two clips per condition. Because independent Kokoro runs produced different
+waveforms even for clean controls, we used the exact saved clean waveforms for a separate
+paired check of the mixer and WAV encoding. Across eight paired mixes, measured SNRs
+were within 0.01 dB of target at the reported precision. This does not measure the SNR
+of every generated clip.
+
+Full batch job `61505948` completed with exit `0:0` in **4m 1s** on one A100-SXM4-40GB;
+the generator took **3m 16.378s** of wall time. The audit checked **2,504 unique 16 kHz
+mono PCM16 WAVs** through their last frame, all manifest paths and source records, and
+the assigned SNR counts: **501 each** for clean, 20, 10 and 5 dB, and **500** for 0 dB.
+The generating job script, code commit, split and noise hashes, Slurm log and
+`validation.log` are in `$DATA_DIR/caller-audio-eval.ALpLBJ/` on the producer's
+scratch. The generated manifest is `eval/eval.jsonl` inside that directory.
+Thomas spot-checked the first five full-run clips, one per condition, and reported all
+five understandable with background noise audible. These results validate input
+preparation; Whisper WER and system latency require separate evaluation runs.
 
 ### D. Team handoff and status
 
-Give the team the agreed readable `$DATA_DIR`, artifact counts, validation logs and source
-manifest. Set `DATA_DIR` in each consumer's ignored `slurm/env.sh` to that snapshot.
-Task 3 consumes `medquad/finetune.jsonl` and `rag_index/`; system evaluation consumes
-`eval/eval.jsonl` and the same index. Commit code and documentation, not raw datasets,
-environments, caches or model weights. Preserve important artifacts in approved persistent
-storage: Perlmutter scratch is temporary storage.
+**Task 2 v1 handoff:** use `/global/cfs/cdirs/m4431/distributed-voice-agent-team`
+on the [NERSC Community File System](https://docs.nersc.gov/filesystems/community/).
+Thomas created the directory with owner-only permissions and verified the archive's
+SHA-256 checksum on CFS. The staged contents are about 239 MB. Named read grants and a
+teammate copy, checksum and extraction check are still pending. Access is intended for
+the team members' NERSC accounts.
+
+The handoff contains `task2-data-rag-v1.tar` and `SHA256SUMS`. Inside the archive:
+
+- `medquad/`: validated v3 splits, renamed to match the job scripts.
+- `eval/`: 2,504 caller WAVs and `eval.jsonl`.
+- `rag_index/`: 8,227-vector Genetics metadata candidate used as the v1 default.
+- `rag_index_health_only/`: separate 2,047-vector Health Topics baseline. Keep the
+  selected index fixed across policy comparisons; the dev probes do not establish
+  that one index improves held-out answer accuracy.
+- `evidence/`: validation reports, build script, source fingerprints, and job log.
+
+After the owner confirms access, copy from CFS to your own scratch on a login node,
+verify the archive, and extract it into a fresh directory:
+
+```bash
+TEAM_HANDOFF=/global/cfs/cdirs/m4431/distributed-voice-agent-team
+STAGED_DATA="$(mktemp -d "$SCRATCH/voiceagent-task2-v1.XXXXXX")" &&
+cp "$TEAM_HANDOFF/"{task2-data-rag-v1.tar,SHA256SUMS} "$STAGED_DATA/" &&
+(cd "$STAGED_DATA" && sha256sum --check SHA256SUMS && tar -xf task2-data-rag-v1.tar) &&
+test "$(wc -l < "$STAGED_DATA/eval/eval.jsonl")" -eq 2504 &&
+test -s "$STAGED_DATA/rag_index/index.faiss" &&
+printf 'DATA_DIR=%s\n' "$STAGED_DATA"
+```
+
+Use the printed path for `DATA_DIR` in your ignored `slurm/env.sh`. Task 3 reads
+`medquad/finetune.jsonl` and `rag_index/`; system evaluation reads `eval/eval.jsonl`
+and the same index. Keep datasets, environments, caches, and model weights out of Git.
 
 - [x] Local Genetics corpus, MedQuAD parser and split-audit fixture tests: 54 passed, including optional source metadata; command and local log path recorded above.
 - [x] Real MedQuAD v3 split audit passes on Perlmutter: 14,344 valid rows, 0 errors; counts and evidence paths recorded above, hashes in the JSON audit.
 - [x] Real MedlinePlus index built and integrity checked: 2,047 vectors, dimension 384; ten dev retrieval probes saved.
 - [ ] Review corpus coverage and passage relevance, including the mismatched dev examples.
-- [ ] Clean pilot checked; noise source and full caller audio checked.
+- [x] Clean pilot, noise source checks, and full caller-audio integrity audit completed.
+- [x] Listening spot-check: one clip from each of the five conditions was understandable.
 - [ ] Team can read the frozen snapshot and reproduce preparation from its manifest.
 
 ## What the evaluation measures
@@ -705,9 +751,9 @@ all three tiers answering.
 
 **2. Data and RAG — Thomas Wei** (step 2; [detailed plan](#task-2-data-and-rag)). Done when
 the reference splits, index and caller audio pass the documented checks and are shared.
-- [ ] MedQuAD splits and integrity audit; record source revision and actual counts
+- [x] MedQuAD splits and integrity audit; record source revision and actual counts
 - [ ] MedlinePlus FAISS index and dev retrieval review
-- [ ] Noise selection, clean audio pilot, full caller audio and manifest checks
+- [x] Noise selection, clean audio pilot, full caller audio and manifest checks
 - [ ] Reproducible artifact manifest and team handoff
 
 **3. Router dataset** (step 4, `distill.sbatch`). Done when `train.jsonl` / `val.jsonl` exist
