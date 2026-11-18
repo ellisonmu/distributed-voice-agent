@@ -25,6 +25,7 @@ RUN_DIR=logs/turbo-$SLURM_JOB_ID
 mkdir -p "$RUN_DIR"
 PY=$VOICEAGENT_ENV/bin/python
 echo "head=$NODE3 worker=$NODE4 TP=${TURBO_TP:-4} PP=${TURBO_PP:-2}"
+[ -x "$VLLM_ENV/bin/ray" ] || { echo "Ray is not installed: $VLLM_ENV/bin/pip install ray" >&2; exit 1; }
 
 srun --overlap -N1 -n1 -w "$NODE3" --gpus-per-node=4 bash slurm/turbo_ray.sh head "$RUN_DIR" &
 srun --overlap -N1 -n1 -w "$NODE4" --gpus-per-node=4 bash slurm/turbo_ray.sh worker "$RUN_DIR" &

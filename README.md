@@ -75,7 +75,7 @@ module load python
 conda create -y -p $SCRATCH/envs/voiceagent python=3.12
 $SCRATCH/envs/voiceagent/bin/pip install -e '.[serve,asr,tts,rag,eval,train,plots]'
 conda create -y -p $SCRATCH/envs/vllm python=3.12
-$SCRATCH/envs/vllm/bin/pip install vllm
+$SCRATCH/envs/vllm/bin/pip install vllm ray            # ray: the 405B spans two nodes
 # Whisper servers get their own env: faster-whisper needs CUDA 12 cuBLAS/cuDNN, PyTorch above brings CUDA 13
 conda create -y -p $SCRATCH/envs/asr python=3.12
 $SCRATCH/envs/asr/bin/pip install -e '.[serve,asr]' nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'

@@ -19,6 +19,7 @@ srun --overlap -N1 -n1 -w "$NODE2" --gpus-per-node=4 bash slurm/node2_llm.sh "$R
 
 if [ "${#NODES[@]}" -ge 4 ]; then
   export NODE3=${NODES[2]} NODE4=${NODES[3]}
+  [ -x "$VLLM_ENV/bin/ray" ] || { echo "Ray is not installed: $VLLM_ENV/bin/pip install ray" >&2; exit 1; }
   CONFIG=${CONFIG:-configs/cluster_16gpu.yaml}
   SWEEP_POLICIES=${SWEEP_POLICIES:-"always_small always_large always_turbo adaptive adaptive_no_filler"}
   srun --overlap -N1 -n1 -w "$NODE3" --gpus-per-node=4 bash slurm/turbo_ray.sh head "$RUN_DIR" &
