@@ -17,6 +17,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source slurm/env.sh
+source slurm/job_env.sh
 mapfile -t NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 export NODE3=${NODES[0]} NODE4=${NODES[1]}
 export NCCL_DEBUG=INFO  # vLLM's log then says which transport NCCL picked

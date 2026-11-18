@@ -3,8 +3,6 @@ export NERSC_ACCOUNT=m0000_g                          # pass at submit: sbatch -
 export VOICEAGENT_ENV=$SCRATCH/envs/voiceagent       # venv: pip install -e '.[serve,asr,tts,rag,eval,train,plots]'
 export VLLM_ENV=$SCRATCH/envs/vllm                   # separate venv: pip install vllm
 export HF_HOME=$SCRATCH/hf                           # model weights cache; run `huggingface-cli login` once
-export HF_HUB_OFFLINE=1   # jobs use the downloaded weights; without it, parallel servers get rate-limited (HTTP 429).
-                         # Unset it (HF_HUB_OFFLINE=0) only when downloading a new model.
 export DATA_DIR=$SCRATCH/voiceagent-data             # medquad/, eval/, rag_index/
 export LLM_SMALL=meta-llama/Llama-3.1-8B-Instruct
 # After fine-tuning, submit with ROUTER_LORA=<adapter dir> LLM_ROUTER=router FILLER_MODE=generated

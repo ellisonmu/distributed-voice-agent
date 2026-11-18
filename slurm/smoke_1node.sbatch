@@ -16,6 +16,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source slurm/env.sh
+source slurm/job_env.sh
 export NODE1=$(hostname)
 RUN_DIR=logs/smoke-$SLURM_JOB_ID
 mkdir -p "$RUN_DIR"

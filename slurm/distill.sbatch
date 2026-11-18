@@ -18,6 +18,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source slurm/env.sh
+source slurm/job_env.sh
 PY=$VOICEAGENT_ENV/bin/python
 WORK=$DATA_DIR/distill
 LOGS=logs/distill-$SLURM_JOB_ID

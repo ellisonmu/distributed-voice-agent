@@ -3,6 +3,7 @@
 # run the closed-loop sweep, summarize. 2 nodes = 8-GPU layout, 4 nodes = 16-GPU layout.
 set -euo pipefail
 source slurm/env.sh
+source slurm/job_env.sh
 
 mapfile -t NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 export NODE1=${NODES[0]} NODE2=${NODES[1]}

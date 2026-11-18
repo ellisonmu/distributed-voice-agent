@@ -15,6 +15,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source slurm/env.sh
+source slurm/job_env.sh
 : "${RUNS:?set RUNS to a sweep directory, e.g. RUNS=logs/run-123}"
 PY=$VOICEAGENT_ENV/bin/python
 URL=http://$(hostname):8100

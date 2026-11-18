@@ -19,6 +19,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source slurm/env.sh
+source slurm/job_env.sh
 STRATEGY=${STRATEGY:-fsdp}
 OUT=${OUT:-$SCRATCH/router-$STRATEGY}
 

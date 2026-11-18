@@ -9,6 +9,7 @@
 set -euo pipefail
 RUN_DIR=$1
 source slurm/env.sh
+source slurm/job_env.sh
 PY=$VOICEAGENT_ENV/bin/python
 VLLM=$VLLM_ENV/bin/vllm
 LORA_ARGS=()

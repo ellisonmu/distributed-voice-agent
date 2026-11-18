@@ -9,6 +9,7 @@ set -euo pipefail
 ROLE=$1
 RUN_DIR=$2
 source slurm/env.sh
+source slurm/job_env.sh
 RAY=$VLLM_ENV/bin/ray
 PORT=6379
 TP=${TURBO_TP:-4}
