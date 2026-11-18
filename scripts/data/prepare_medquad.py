@@ -4,8 +4,9 @@ Input: a clone of https://github.com/abachaa/MedQuAD (folders of XML files, one 
 per file). Subsets whose answers were removed for copyright are skipped automatically,
 since their <Answer> elements are empty.
 
-Splits are by document, so all questions about one topic (e.g. one disease) land in the
-same split and no topic leaks from fine-tuning into evaluation."""
+Splits are by source document: every question from that document stays together.
+Different documents may cover the same disease or topic, so this does not guarantee
+a topic-held-out evaluation. Audit the outputs with voiceagent.analysis.validate_medquad."""
 from __future__ import annotations
 
 import argparse
@@ -28,10 +29,11 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
     seen: set[str] = set()
     for xml_path in sorted(medquad_dir.rglob("*.xml")):
         root = ET.parse(xml_path).getroot()
+        source_file = xml_path.relative_to(medquad_dir).as_posix()
         doc_id = f"{xml_path.parent.name}/{root.get('id', xml_path.stem)}"
         source = root.get("source", xml_path.parent.name)
         focus = (root.findtext("Focus") or "").strip()
-        for pair in root.iter("QAPair"):
+        for pair_index, pair in enumerate(root.iter("QAPair"), 1):
             q_el, a_el = pair.find("Question"), pair.find("Answer")
             if q_el is None or a_el is None:
                 continue
@@ -40,8 +42,14 @@ def parse(medquad_dir: Path) -> dict[str, list[dict]]:
             if not question or not answer or question.lower() in seen:
                 continue
             seen.add(question.lower())
+            # Both Document IDs and qids can repeat in different XML files;
+            # qids/pids are not required for a unique, traceable reference key.
+            source_question_id = (q_el.get("qid") or "").strip() or None
             docs.setdefault(doc_id, []).append({
-                "question_id": q_el.get("qid") or f"{doc_id}-{pair.get('pid')}",
+                "question_id": f"{source_file}#pair-{pair_index}",
+                "source_question_id": source_question_id,
+                "source_file": source_file,
+                "source_pair_index": pair_index,
                 "question": question,
                 "answer": answer,
                 "qtype": q_el.get("qtype", "unknown"),

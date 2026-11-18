@@ -85,14 +85,9 @@ mkdir -p logs
 Download the 405B (~203 GiB) to `$HF_HOME` on `$SCRATCH` early; it takes a while.
 
 ### 2. Data (needs: setup)
-```bash
-git clone https://github.com/abachaa/MedQuAD $DATA_DIR/MedQuAD-src
-python scripts/data/prepare_medquad.py --medquad-dir $DATA_DIR/MedQuAD-src --out-dir $DATA_DIR/medquad
-python scripts/rag/build_index.py --mplus-xml <mplus_topics_*.xml> --out-dir $DATA_DIR/rag_index
-# needs a running TTS server (servers/tts_server.py) and a noise set such as MUSAN's noise/ folder
-python scripts/data/make_caller_audio.py --split $DATA_DIR/medquad/eval.jsonl --out-dir $DATA_DIR/eval \
-    --tts-url http://<node>:9011 --noise-dir <noise wavs>
-```
+See [Task 2: Data and RAG](#task-2-data-and-rag) for ownership, source snapshots,
+commands and acceptance checks. MedQuAD preparation and caller audio can proceed alongside
+cluster bring-up; Task 2 used a standalone Kokoro service on one Perlmutter GPU.
 
 ### 3. Bring-up (needs: setup; data optional)
 ```bash
@@ -157,6 +152,465 @@ python -m voiceagent.analysis.judge agreement logs/run-<id>/handcheck.csv
 python -m voiceagent.analysis.plots --summary logs/run-<id>/summary.csv --out-dir figures \
     --train-runs $SCRATCH/router-ddp $SCRATCH/router-fsdp
 ```
+
+## Task 2: Data and RAG
+
+**Owner: Thomas Wei.** Prepare the reference QA splits, retrieval corpus and caller audio
+used by router training and system evaluation. This work does not require the 405B server.
+Coordinate with the team for the final shared data location. Personal scratch paths may not
+be readable by every teammate.
+
+### Deliverables and evidence
+
+| Artifact under `$DATA_DIR` | Purpose | Acceptance evidence |
+|---|---|---|
+| `medquad/{finetune,dev,eval}.jsonl` | Answered QA pairs, separated by source document | Split audit passes; actual row/document counts, hashes and source revision recorded |
+| `rag_index/{index.faiss,chunks.jsonl,meta.json}` | MedlinePlus passages and bge-small retrieval index | FAISS vector count, chunk count and metadata agree; inspect retrieval for 10 dev questions |
+| `eval/eval.jsonl` and its `audio/*.wav` | Caller questions with clean/noisy audio | References and question IDs preserved; every relative path resolves; WAVs readable as 16 kHz mono PCM16 |
+| `manifests/` and `logs/` | Reproduce the data snapshot and preparation | Source URLs/revisions, SHA-256 hashes, seed, commands, package versions and real execution logs |
+
+Implementation and execution are tracked separately. Thomas ran the split audit's 18 fixture
+tests on macOS with Python 3.14.6 and pytest 9.2.0: **18 passed in 0.10 s**. The command was
+`.venv/bin/python -m pytest tests/test_validate_medquad.py -v --junitxml=logs/task2-validation.xml`;
+the XML log is local and not committed. Real Perlmutter results for the split, index and
+caller audio are recorded separately below.
+
+The first real MedQuAD preparation ran on Perlmutter with source revision
+`577bd37b96c02d1833b2c9eed2de9f96964e96cb` and seed 0. It produced 14,344 answered
+QA pairs from 5,371 documents: finetune 10,838/4,052 documents, dev 1,002/404 documents,
+and eval 2,504/915 documents. The audit **failed** on six duplicate/overlapping question-ID
+checks; it reported no document or normalized-question overlap. Shared focus labels were
+51 (finetune/dev), 164 (finetune/eval) and 17 (dev/eval).
+
+The parser had treated upstream `qid` values as globally unique, but different collections
+reuse them (for example, [GHR](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/3_GHR_QA/0000001.xml)
+and [NIDDK](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/5_NIDDK_QA/0000001.xml)).
+The first fix added `doc_id` as a question-ID namespace. Thomas reran the parser regression and split-audit fixtures on
+macOS with Python 3.14.6 and pytest 9.2.0: **24 passed in 0.09 s**. The command was
+`.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-id-fix.xml`;
+the XML log is local and not committed. The real `medquad-v2` rebuild retained the same
+row/document counts and focus warnings, and passed the cross-split ID checks, but its audit
+still **failed**: eval contained eight duplicated question-ID values. Some CancerGov XML
+files reuse both document IDs and question IDs, for example
+[`0000013_2.xml`](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/1_CancerGov_QA/0000013_2.xml)
+and [`0000013_2_1.xml`](https://github.com/abachaa/MedQuAD/blob/577bd37b96c02d1833b2c9eed2de9f96964e96cb/1_CancerGov_QA/0000013_2_1.xml).
+
+Prepared question IDs now use `<relative XML path>#pair-<1-based XML pair position>`.
+They do not rely on upstream IDs being unique. `source_file`, `source_pair_index` and
+`source_question_id` retain the source location and original `qid` (null when absent).
+Positions are assigned before filtering, so dropping a question does not renumber later
+questions. IDs are reproducible for the recorded source revision regardless of checkout
+location; editing/reordering source XML can change them. The original `doc_id` grouping
+remains unchanged so related XML files with a shared document ID stay in the same split.
+Thomas ran the updated parser and split-audit fixtures on macOS with Python 3.14.6 and
+pytest 9.2.0: **26 passed in 0.10 s**. The command was
+`.venv/bin/python -m pytest tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-source-key-fix.xml`;
+the XML log is local and not committed.
+
+The real Perlmutter `medquad-v3` rebuild **passed with 0 errors** using the source-file/pair
+keys. It retained all 14,344 prepared QA pairs and the same split sizes:
+
+| Split | Valid QA pairs | Document groups |
+|---|---:|---:|
+| finetune | 10,838 | 4,052 |
+| dev | 1,002 | 404 |
+| eval | 2,504 | 915 |
+
+The audit found no duplicate question IDs or normalized questions within splits and no
+question-ID, question-text or document-group overlap across splits. Shared focus-label
+warnings remain 51/164/17 for finetune-dev/finetune-eval/dev-eval. These are integrity checks,
+not measurements of ASR accuracy, retrieval relevance or answer quality.
+
+The validated data is at `/pscratch/sd/y/ycw71/voiceagent-data/task2-LaJrsN/medquad-v3/`.
+Its audit is `manifests/medquad-validation-v3.json`, with execution logs in
+`logs/{prepare,validate}-medquad-v3.log` under the same snapshot root. The code revision
+was recorded in `manifests/medquad-v3-code-commit.txt`; the fix pushed for this run was
+`371cc32`. The original `medquad/` and `medquad-v2/` are failed attempts retained for evidence;
+consumers must explicitly use `medquad-v3/` until a validated handoff layout is established.
+
+Keep both failed audits as evidence; rebuild into a new output directory and use new
+log/report paths. Do not mix old caller audio, distillation records or judgments with the
+new question IDs.
+
+### A. MedQuAD snapshot and split audit
+
+Use a fresh versioned directory. The preparation and audio scripts can overwrite files in
+their output directories, so preserve completed snapshots and use a new path for a rebuild.
+The following is intended for the Perlmutter **login node**: lightweight source download and
+XML/JSON preparation only. Do not run model embedding or TTS inference there.
+
+```bash
+cd "$SCRATCH/distributed-voice-agent"
+module load cray-python/3.12.12
+source .venv/bin/activate
+export HF_HOME="$SCRATCH/hf"
+export PIP_CACHE_DIR="$SCRATCH/voiceagent-cache/pip"
+export DATA_DIR="$SCRATCH/voiceagent-data/task2-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$DATA_DIR/raw" "$DATA_DIR/manifests" "$DATA_DIR/logs"
+printf 'export DATA_DIR=%q\n' "$DATA_DIR" > "$DATA_DIR/paths.sh"
+git rev-parse HEAD > "$DATA_DIR/manifests/code-commit.txt"
+git status --short > "$DATA_DIR/manifests/code-status.txt"
+python -m pip freeze > "$DATA_DIR/manifests/packages.txt"
+git clone https://github.com/abachaa/MedQuAD.git "$DATA_DIR/raw/MedQuAD-src"
+git -C "$DATA_DIR/raw/MedQuAD-src" rev-parse HEAD > "$DATA_DIR/manifests/medquad-commit.txt"
+```
+
+Confirm the source download and recorded revision before preparing data. Reuse the printed
+`DATA_DIR` on later logins by sourcing its `paths.sh`; do not recreate a new timestamp each
+time you resume the same snapshot. The existing `.venv` is reused rather than reinstalled.
+
+```bash
+set -o pipefail
+python scripts/data/prepare_medquad.py \
+    --medquad-dir "$DATA_DIR/raw/MedQuAD-src" --out-dir "$DATA_DIR/medquad" \
+    --seed 0 --eval-size 2500 --dev-size 1000 \
+    2>&1 | tee "$DATA_DIR/logs/prepare-medquad.log"
+python -m voiceagent.analysis.validate_medquad \
+    --data-dir "$DATA_DIR/medquad" \
+    --source-commit "$(cat "$DATA_DIR/manifests/medquad-commit.txt")" \
+    --out "$DATA_DIR/manifests/medquad-validation.json" \
+    2>&1 | tee "$DATA_DIR/logs/validate-medquad.log"
+```
+
+The splitter skips empty answers and deduplicates questions. Whole-document assignment can
+overshoot the requested dev/eval sizes; record actual counts rather than assuming exact
+sizes. The usable answered subset is smaller than the original MedQuAD collection because
+some upstream subsets have no answer text. Follow the [upstream source and citation
+instructions](https://github.com/abachaa/MedQuAD).
+
+The audit checks nonempty string IDs/questions/answers/document IDs, malformed rows, empty
+splits, duplicate question IDs and normalized question text, and document/question overlap
+between splits. It writes a JSON report even on validation failure, exits nonzero on errors,
+and records split hashes and source/qtype counts. It refuses to replace an existing report
+unless `--overwrite` is explicit, and never allows the report to replace a split file.
+Stop on failure and inspect the report before using the data for training or evaluation.
+
+Shared disease/topic `focus` labels are reported as warnings. A document-disjoint split
+does **not** guarantee topic isolation: multiple source documents can discuss the same
+disease. Exact text checks also do not detect paraphrases. Keep this limitation in the report;
+do not describe the current split as a topic-held-out benchmark.
+
+### B. MedlinePlus retrieval index
+
+Source preparation completed on Perlmutter: `raw/mplus_topics_2026-11-13.xml` downloaded
+successfully (about 29 MB), with SHA-256
+`895f6ec17a32ad051db55248656446f164b1d9a47475103bffa79e17288231d2`.
+Its source URL, download timestamp and checksum are recorded in
+`manifests/medlineplus-{source-url,downloaded-utc,sha256}.txt`; `mplus-paths.sh` restores
+`MPLUS_XML`. BGE model files were also cached successfully under `$SCRATCH/hf` at revision
+`5c38ec7c405ec4b44b94cc5a9bb96e735b38267a`, recorded in `manifests/bge-snapshot.json`.
+
+GPU execution and the index build subsequently succeeded in allocation `61462525` on
+`nid200325`, using an NVIDIA A100-SXM4-80GB, PyTorch `2.15.0+cu132` and CUDA build 13.2.
+The CUDA tensor check passed. The builder ran with `--device cuda`, 250-word chunks and
+50-word overlap, producing **2,047 vectors of dimension 384**. The saved FAISS vector count,
+passage-row count and metadata count agree; the inner-product index type and embedding
+dimension checks passed. Evidence is in `logs/rag-build-61462525.log`,
+`logs/rag-check-61462525.log` and `manifests/rag-validation.json` under the data snapshot.
+
+Ten dev questions sampled with seed 0 each returned three nonempty passages with finite
+scores. Several titles directly matched the query (for example, Volcanoes, Cancer
+Chemotherapy and Myelodysplastic Syndromes), while others did not: the Lynch syndrome
+query returned Myasthenia Gravis first, and Anonychia congenita returned Ataxia
+Telangiectasia first. This establishes a working retrieval pipeline, not adequate relevance.
+The saved report retains full passage text for human review. Corpus coverage and relevance
+need investigation before the index is accepted; no retrieval-accuracy percentage or
+answer-quality improvement has been measured. Similarity scores are not correctness probabilities.
+
+A login-node keyword inspection was saved as `manifests/rag-keyword-coverage.json`:
+
+| Keyword | English XML records mentioning it | Indexed chunks mentioning it |
+|---|---:|---:|
+| epidermolysis bullosa | 3 | 1 |
+| anonychia | 1 | 0 |
+| lynch | 5 | 4 |
+| rapadilino | 2 | 0 |
+| ornithine transcarbamylase | 3 | 0 |
+| glomerular | 6 | 1 |
+| hemochromatosis | 8 | 4 |
+
+The XML scan includes metadata, link titles and URLs, whereas the current builder indexes
+only title + full summary. A raw XML mention therefore does not establish that explanatory
+passage text is available to retrieval. Three inspected rare-condition keywords were absent
+from indexed passages. Lynch appeared in four chunks but did not occur in the top-three
+retrieved titles for its sampled dev question; passage suitability and ranking both need review.
+These keyword counts are diagnostic observations, not corpus recall or retrieval accuracy.
+
+Next candidate: add the complete official [MedlinePlus Genetics XML
+compendium](https://medlineplus.gov/about/developers/geneticsdatafilesapi/) as another
+source, with its own snapshot/checksum. Keep the 2,047-chunk index as the baseline and build
+any expanded corpus into a separate directory. Use the full public source and fixed dev
+probes to investigate coverage; record its relationship to MedQuAD's source material in any
+evaluation.
+
+The Genetics download subsequently succeeded: `raw/ghr-summaries.xml` is about 7.7 MB,
+with SHA-256 `ba7afc4590afa2caf2ac907bbabf414f70281da11315a342f63d6e682dc7122c`.
+HTTP headers, source URL, timestamp and checksum are saved in `manifests/genetics-*`;
+`genetics-paths.sh` restores `GENETICS_XML`. Inspection of this actual file found namespace
+`https://medlineplus.gov/download/ghr-summaries-20250602.xsd`, 1,305 health-condition records,
+1,507 genes, 24 chromosomes and one mitochondrial-DNA record. These are XML record counts,
+not generated passage counts.
+
+`scripts/rag/build_index.py --genetics-xml` now optionally adds all four record types.
+The parser handles the XML namespace and both nested and escaped HTML, chunks each
+`text-list/text/html` section independently, and retains the section role, source URL,
+record ID, source filename and synonyms. The embedding context includes the section title
+and up to eight synonyms. Link listings and database pointers are not substituted for
+missing narrative text. No MedQuAD questions or reference answers are inputs to this builder.
+The standard Health Topic summaries remain included, with their original embedding text
+format. Metadata now includes source hashes and per-corpus chunk counts, and the builder
+refuses an existing output directory. Thomas ran the Genetics corpus, MedQuAD parser and
+split-audit fixture tests on macOS with Python 3.14.6 and pytest 9.2.0:
+**47 passed in 0.13 s**. The command was
+`.venv/bin/python -m pytest tests/test_rag_corpus.py tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-genetics-parser.xml`;
+the XML log is local and not committed.
+
+Real XML preparation on Perlmutter with code `a9d4910` subsequently **passed**. Both source
+checksums matched the download manifests, and the original 2,047 Health Topic passages
+matched the baseline's title/text/URL values in order. The combined candidate contains
+**5,689 chunks**: 2,047 Health Topic and 3,642 Genetics chunks. Genetics chunk counts are
+2,054 condition, 1,562 gene, 25 chromosome and one mitochondrial-DNA chunk.
+Evidence is in `manifests/rag-genetics-preflight.json` and
+`logs/rag-genetics-preflight.log`, with the code SHA in
+`manifests/rag-genetics-preflight-code-commit.txt`.
+
+Literal keyword chunk counts in the candidate are 15 for epidermolysis bullosa, one for
+anonychia, five for lynch, six for rapadilino, zero for ornithine transcarbamylase, two for
+glomerular and eight for hemochromatosis. These counts include titles and narrative text;
+they do not establish semantic coverage or retrieval quality. Alternative terminology and
+remaining coverage gaps still need review.
+
+The combined index subsequently built successfully in allocation `61464498` on `nid200308`,
+using the cached BGE model and `--device cuda`. Its integrity checks **passed**:
+5,689 vectors of dimension 384, matching passage/metadata/preparation counts, source
+manifests, inner-product metric and embedding dimension. Model name and query prefix
+match the baseline. The existing ten dev probes were reused without resampling;
+full baseline/candidate passages are saved in `manifests/rag-genetics-comparison.json`.
+The build log is `logs/rag-genetics-build-61464498.log`.
+
+| Dev query topic | Baseline first title | Candidate first title | Preliminary observation |
+|---|---|---|---|
+| Epidermolysis bullosa acquisita | Hidradenitis Suppurativa | Epidermolysis bullosa simplex (description) | The requested condition name is absent from candidate top-3; similar names do not establish relevance |
+| Volcanoes | Volcanoes | Volcanoes | Same top-3 titles and scores |
+| Anonychia congenita | Ataxia Telangiectasia | Anonychia congenita (description) | Exact topic now first; assess symptom support in full passage |
+| Lynch syndrome treatments | Myasthenia Gravis | Myasthenia Gravis | Lynch syndrome appears second; first result remains off-topic |
+| RAPADILINO inheritance | Tay-Sachs Disease | RAPADILINO syndrome (description) | Exact topic now first; inheritance support still needs full-passage review |
+| Ornithine transcarbamylase deficiency | Alpha-1 Antitrypsin Deficiency | Carbamoyl phosphate synthetase I deficiency (description) | Requested condition name absent from candidate top-3 |
+| Hereditary hemochromatosis | Hemochromatosis | Hereditary hemochromatosis (description) | More specific topic title first; review inheritance support |
+| Glomerular Diseases | Kidney Tests | Polycystic kidney disease (description) | Candidate titles require relevance review for this broad query |
+| Cancer Chemotherapy | Cancer Chemotherapy | Cancer Chemotherapy | Same top-3 titles and scores |
+| Myelodysplastic Syndromes | Myelodysplastic Syndromes | 5q minus syndrome (description) | Exact topic title moves to second; rank change needs review |
+
+These observations use the returned titles and displayed excerpts, not completed human
+judgments of all full passages. The expanded corpus helps some topic matches but does not
+establish consistently better retrieval, answer support or answer quality. No accuracy
+percentage is reported. Preserve both indexes and this diagnostic sample; complete passage
+review before selecting the handoff index or making further retrieval changes.
+
+After fixture tests and real XML preparation pass, build a separate candidate on a
+compute node using the same model and chunk settings:
+
+```bash
+python scripts/rag/build_index.py --mplus-xml "$MPLUS_XML" \
+    --genetics-xml "$GENETICS_XML" --out-dir "$DATA_DIR/rag_index_genetics" \
+    --model BAAI/bge-small-en-v1.5 --chunk-words 250 --overlap 50 --device cuda
+```
+
+Compare the saved baseline dev probes with the same questions and top-k on the candidate,
+checking actual passage relevance and source coverage. Keep eval references out of tuning.
+Do not claim improved retrieval or answer quality until the comparison has been run and
+reviewed; adding more source text alone is not a measured improvement.
+
+The saved full passages were subsequently inspected; see
+[the preliminary passage-support review](docs/task2-retrieval-review.md). Anonychia's
+first passage directly supports its symptom question, but the Lynch treatment and
+RAPADILINO inheritance questions still lack answering evidence despite matching titles.
+The existing Hemochromatosis inheritance evidence remains available but moves from rank 1
+to rank 3, and the broad MDS overview moves from rank 1 to rank 2. This is an assistant
+inspection of actual output, not a human grade or held-out accuracy measurement. Thomas's
+confirmation and broader validation are pending.
+
+Inspection of the original XML then confirmed the missing source fields: RAPADILINO's
+`inheritance-pattern-list` contains the publisher label `Autosomal recessive`, and its
+related-gene list contains `RECQL4`. Hereditary hemochromatosis has both `Autosomal recessive`
+and `Autosomal dominant` labels and five listed genes. The scan returned those two records
+and no record with gene symbol `OTC`; this targeted scan does not establish absence under
+all possible names or aliases.
+
+The builder now offers **`--include-genetics-metadata`**, default off. It adds separately
+labelled source-metadata passages for the publisher's inheritance `memo` labels and
+related-gene symbols, preserving source codes, URLs and record IDs. It retains multiple
+inheritance labels without assigning them to individual genes or subtypes. Unlabelled
+inheritance codes are not translated into inferred medical statements; related genes are
+explicitly identified as associations, not specific mutations or variant effects.
+Existing narrative passages remain unchanged when this mode is enabled, and the previous
+narrative-only mode remains available. Thomas ran the corpus, MedQuAD parser and split-audit
+fixtures on macOS with Python 3.14.6 and pytest 9.2.0: **54 passed in 0.14 s**. The command was
+`.venv/bin/python -m pytest tests/test_rag_corpus.py tests/test_prepare_medquad.py tests/test_validate_medquad.py -v --junitxml=logs/task2-genetics-metadata.xml`;
+the XML log is local and not committed.
+
+Real metadata preparation on Perlmutter with code `a01e129` subsequently **passed**:
+8,227 total chunks (2,047 Health Topic and 6,180 Genetics), with 5,689 preserved narrative
+chunks, 1,305 inheritance-pattern metadata chunks and 1,233 related-gene metadata chunks.
+Both XML source hashes match the previous snapshots. The saved RAPADILINO metadata
+includes the publisher's `Autosomal recessive` label and `RECQL4` entry, and the
+hemochromatosis metadata retains both inheritance labels and all five listed genes.
+Evidence is in `manifests/rag-metadata-preflight.json` and
+`logs/rag-metadata-preflight.log`, with the code SHA in
+`manifests/rag-metadata-preflight-code-commit.txt`.
+
+The metadata-enabled index subsequently built successfully in allocation `61466521` on
+`nid200261`: **8,227 vectors of dimension 384**. Integrity checks passed against preparation
+counts, source manifests, metadata mode, model/query prefix, index metric and model
+dimension. Evidence is in `logs/rag-metadata-build-61466521.log`,
+`logs/rag-metadata-check-61466521.log` and `manifests/rag-metadata-comparison.json`.
+
+Slurm accounting confirmed allocation `61466521` and both job steps **COMPLETED** with
+exit code `0:0`. The allocation elapsed time was 00:08:09; index-build step `.0` took
+00:00:41 and integrity/retrieval-check step `.1` took 00:00:11. These are job-step wall
+times including their setup/loading work, not isolated encoder latency or a system
+serving benchmark. The allocation has been released.
+
+The same ten dev questions were compared across all three saved indexes. RAPADILINO's
+inheritance question now retrieves the publisher's `Autosomal recessive` metadata first,
+and hereditary hemochromatosis retrieves both listed inheritance labels first. The latter
+is a list of possible patterns, not a per-gene/subtype mapping. The Lynch treatment query
+still lacks answering evidence, and the ornithine transcarbamylase query retrieves other
+conditions' related-gene metadata. The epidermolysis acquisita and broad glomerular
+queries also retain the earlier limitations. These fields improve support for the two
+observed inheritance probes but do not establish overall retrieval or answer accuracy.
+The [passage review](docs/task2-retrieval-review.md) records the three-way findings.
+Human confirmation and broader validation remain pending.
+
+After validation, use a new output directory for this candidate:
+
+```bash
+python scripts/rag/build_index.py --mplus-xml "$MPLUS_XML" \
+    --genetics-xml "$GENETICS_XML" --include-genetics-metadata \
+    --out-dir "$DATA_DIR/rag_index_genetics_metadata" \
+    --model BAAI/bge-small-en-v1.5 --chunk-words 250 --overlap 50 --device cuda
+```
+
+Download a dated **Health Topic XML** snapshot from the [official MedlinePlus XML
+page](https://medlineplus.gov/xml.html), not the Health Topic Group XML. Record its exact
+URL, download date and SHA-256 in `manifests/`. Keep the XML in `raw/`. Choose the snapshot
+explicitly: the upstream download listing changes over time.
+
+Cache [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) using the
+same `HF_HOME` during login-node setup, recording the downloaded model revision. This public
+embedding model is separate from the gated Llama models. Run the embedding/index build in a
+**compute-node allocation**, after confirming the input XML and model cache are ready:
+
+```bash
+# Compute node only. Set MPLUS_XML to the downloaded Health Topic XML's full path.
+python scripts/rag/build_index.py --mplus-xml "$MPLUS_XML" \
+    --out-dir "$DATA_DIR/rag_index" --model BAAI/bge-small-en-v1.5 \
+    --chunk-words 250 --overlap 50 --device cuda
+```
+
+The existing builder keeps English topics, embeds title + passage, normalizes vectors and
+uses FAISS inner-product search. Before handoff, verify `index.ntotal` equals the number of
+rows in `chunks.jsonl` and `meta.json`'s `chunks`. Record vector dimension and index/model
+settings. Inspect top-3 passages for 10 **dev** questions and save question IDs, titles,
+scores and relevance notes. Do not tune retrieval using eval reference answers. A successful
+index build is infrastructure evidence; it is not a measured answer-quality improvement.
+
+### C. Caller audio and noise
+
+Use a team TTS endpoint or start `servers.tts_server` on an allocated compute node and
+wait for `/health`. Start with 10 clean questions from the validated `medquad-v3` eval
+split in a separate pilot directory, then inspect their audio and metadata:
+
+```bash
+# With the allocated TTS service reachable; TTS_URL is its http://host:port URL.
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad-v3/eval.jsonl" \
+    --out-dir "$DATA_DIR/eval-pilot" --tts-url "$TTS_URL" \
+    --snrs clean --limit 10 --concurrency 2 --seed 0
+```
+
+The full build used [DEMAND](https://zenodo.org/records/1227121) by Joachim Thiemann,
+Nobutaka Ito and Emmanuel Vincent (CC BY-SA 3.0): channel 1 of the 16 kHz living-room
+(`DLIVING`), office (`OOFFICE`) and traffic (`STRAFFIC`) archives. The publisher
+archive checksums passed and all three input WAVs passed the job's saved SHA-256 checks.
+Set `NOISE_DIR` to the directory containing those three WAVs. Run generation from an
+allocated compute node with Kokoro already healthy:
+
+```bash
+python scripts/data/make_caller_audio.py --split "$DATA_DIR/medquad-v3/eval.jsonl" \
+    --out-dir "$DATA_DIR/eval" --tts-url "$TTS_URL" --noise-dir "$NOISE_DIR" \
+    --snrs clean,20,10,5,0 --concurrency 1 --seed 0
+```
+
+The current generator assigns **one** condition per question in round-robin order; it does
+not produce all five SNRs for every question. Clean rows have `snr_db: null`. Record actual
+counts by injected SNR and voice. Keep these assignments and the generated WAVs fixed across
+policy comparisons. A seed alone does not establish byte-identical TTS outputs.
+
+**Perlmutter evidence.** Kokoro 0.9.4 used the cached `hexgrad/Kokoro-82M` revision
+`f3ff3571791e39611d31c381e3a41a3af07b4987` and five preset voices
+(`af_heart`, `af_bella`, `af_nicole`, `am_adam`, `am_michael`). The clean pilot
+(job `61504677`) passed checks on all 10 WAVs and matching source rows; sampled clips
+sounded clear. The noise pilot (job `61505157`) passed the same format and manifest
+checks, with two clips per condition. Because independent Kokoro runs produced different
+waveforms even for clean controls, we used the exact saved clean waveforms for a separate
+paired check of the mixer and WAV encoding. Across eight paired mixes, measured SNRs
+were within 0.01 dB of target at the reported precision. This does not measure the SNR
+of every generated clip.
+
+Full batch job `61505948` completed with exit `0:0` in **4m 1s** on one A100-SXM4-40GB;
+the generator took **3m 16.378s** of wall time. The audit checked **2,504 unique 16 kHz
+mono PCM16 WAVs** through their last frame, all manifest paths and source records, and
+the assigned SNR counts: **501 each** for clean, 20, 10 and 5 dB, and **500** for 0 dB.
+The generating job script, code commit, split and noise hashes, Slurm log and
+`validation.log` are in `$DATA_DIR/caller-audio-eval.ALpLBJ/` on the producer's
+scratch. The generated manifest is `eval/eval.jsonl` inside that directory.
+Thomas spot-checked the first five full-run clips, one per condition, and reported all
+five understandable with background noise audible. These results validate input
+preparation; Whisper WER and system latency require separate evaluation runs.
+
+### D. Team handoff and status
+
+**Task 2 v1 handoff:** use `/global/cfs/cdirs/m4431/distributed-voice-agent-team`
+on the [NERSC Community File System](https://docs.nersc.gov/filesystems/community/).
+Thomas created the directory with owner-only permissions and verified the archive's
+SHA-256 checksum on CFS. The staged contents are about 239 MB. Named read grants and a
+teammate copy, checksum and extraction check are still pending. Access is intended for
+the team members' NERSC accounts.
+
+The handoff contains `task2-data-rag-v1.tar` and `SHA256SUMS`. Inside the archive:
+
+- `medquad/`: validated v3 splits, renamed to match the job scripts.
+- `eval/`: 2,504 caller WAVs and `eval.jsonl`.
+- `rag_index/`: 8,227-vector Genetics metadata candidate used as the v1 default.
+- `rag_index_health_only/`: separate 2,047-vector Health Topics baseline. Keep the
+  selected index fixed across policy comparisons; the dev probes do not establish
+  that one index improves held-out answer accuracy.
+- `evidence/`: validation reports, build script, source fingerprints, and job log.
+
+After the owner confirms access, copy from CFS to your own scratch on a login node,
+verify the archive, and extract it into a fresh directory:
+
+```bash
+TEAM_HANDOFF=/global/cfs/cdirs/m4431/distributed-voice-agent-team
+STAGED_DATA="$(mktemp -d "$SCRATCH/voiceagent-task2-v1.XXXXXX")" &&
+cp "$TEAM_HANDOFF/"{task2-data-rag-v1.tar,SHA256SUMS} "$STAGED_DATA/" &&
+(cd "$STAGED_DATA" && sha256sum --check SHA256SUMS && tar -xf task2-data-rag-v1.tar) &&
+test "$(wc -l < "$STAGED_DATA/eval/eval.jsonl")" -eq 2504 &&
+test -s "$STAGED_DATA/rag_index/index.faiss" &&
+printf 'DATA_DIR=%s\n' "$STAGED_DATA"
+```
+
+Use the printed path for `DATA_DIR` in your ignored `slurm/env.sh`. Task 3 reads
+`medquad/finetune.jsonl` and `rag_index/`; system evaluation reads `eval/eval.jsonl`
+and the same index. Keep datasets, environments, caches, and model weights out of Git.
+
+- [x] Local Genetics corpus, MedQuAD parser and split-audit fixture tests: 54 passed, including optional source metadata; command and local log path recorded above.
+- [x] Real MedQuAD v3 split audit passes on Perlmutter: 14,344 valid rows, 0 errors; counts and evidence paths recorded above, hashes in the JSON audit.
+- [x] Real MedlinePlus index built and integrity checked: 2,047 vectors, dimension 384; ten dev retrieval probes saved.
+- [ ] Review corpus coverage and passage relevance, including the mismatched dev examples.
+- [x] Clean pilot, noise source checks, and full caller-audio integrity audit completed.
+- [x] Listening spot-check: one clip from each of the five conditions was understandable.
+- [ ] Team can read the frozen snapshot and reproduce preparation from its manifest.
 
 ## What the evaluation measures
 
@@ -304,9 +758,12 @@ all three tiers answering.
 - [ ] `turbo_2node.sbatch`: 405B serves with TP=4 × PP=2; NCCL uses Slingshot, not sockets
 - [ ] `run_8gpu.sbatch`, then the first short `run_16gpu.sbatch`
 
-**2. Data and RAG** (step 2). Done when `$DATA_DIR/eval/eval.jsonl` and the RAG index exist.
-- [ ] MedQuAD splits; MedlinePlus FAISS index
-- [ ] Pick a noise set; synthesize and noise-mix caller audio
+**2. Data and RAG — Thomas Wei** (step 2; [detailed plan](#task-2-data-and-rag)). Done when
+the reference splits, index and caller audio pass the documented checks and are shared.
+- [x] MedQuAD splits and integrity audit; record source revision and actual counts
+- [ ] MedlinePlus FAISS index and dev retrieval review
+- [x] Noise selection, clean audio pilot, full caller audio and manifest checks
+- [ ] Reproducible artifact manifest and team handoff
 
 **3. Router dataset** (step 4, `distill.sbatch`). Done when `train.jsonl` / `val.jsonl` exist
 with usable label counts.
