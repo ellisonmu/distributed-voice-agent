@@ -10,6 +10,15 @@ ROLE=$1
 RUN_DIR=$2
 source slurm/env.sh
 source slurm/job_env.sh
+# Cross-node NCCL over Slingshot through NERSC's NCCL OFI plugin (the settings `module load nccl`
+# applies). Without it NCCL falls back to TCP ("NET/Socket" in the log). Set before `ray start` so
+# the vLLM workers Ray spawns inherit it. TURBO_NCCL_SOCKET=1 keeps TCP, for the E5 comparison.
+NERSC_NCCL=${NERSC_NCCL:-/global/common/software/nersc9/nccl/2.29.2-cu13}
+if [ "${TURBO_NCCL_SOCKET:-0}" != 1 ] && [ -d "$NERSC_NCCL/plugin/lib" ]; then
+  export LD_LIBRARY_PATH=$NERSC_NCCL/plugin/lib:${LD_LIBRARY_PATH:-}
+  export NCCL_NET="AWS Libfabric" NCCL_SOCKET_IFNAME=hsn NCCL_CROSS_NIC=2 NCCL_NET_GDR_LEVEL=PHB
+  export FI_CXI_DISABLE_HOST_REGISTER=1 FI_CXI_RDZV_THRESHOLD=0
+fi
 RAY=$VLLM_ENV/bin/ray
 PORT=6379
 TP=${TURBO_TP:-4}
