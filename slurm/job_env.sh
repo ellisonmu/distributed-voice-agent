@@ -10,6 +10,9 @@ export TORCHINDUCTOR_CACHE_DIR=$XDG_CACHE_HOME/inductor
 export FLASHINFER_WORKSPACE_BASE=$XDG_CACHE_HOME
 mkdir -p "$XDG_CACHE_HOME"
 
+# Separate env for the Whisper servers (CUDA 12 libraries); see README setup.
+export ASR_ENV=${ASR_ENV:-$SCRATCH/envs/asr}
+
 # Load models from the downloaded copies in $HF_HOME instead of asking Hugging Face; several
 # servers starting at once otherwise get rate-limited (HTTP 429). Set HF_HUB_OFFLINE=0 to download.
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}

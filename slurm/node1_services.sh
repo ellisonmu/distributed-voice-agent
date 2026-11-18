@@ -17,9 +17,15 @@ if [ -n "${ROUTER_LORA:-}" ]; then
   LORA_ARGS=(--enable-lora --lora-modules "router=$ROUTER_LORA" --max-lora-rank 16)
 fi
 
+# Whisper runs from its own env ($ASR_ENV): CTranslate2 (faster-whisper's engine) needs CUDA 12
+# cuBLAS/cuDNN, while the main env's PyTorch brings CUDA 13 libraries with the same file names.
+ASR_PY=$ASR_ENV/bin/python
+ASR_LIBS=$("$ASR_PY" -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
 for i in 0 1; do
-  CUDA_VISIBLE_DEVICES=0 "$PY" -m servers.asr_server --model small --port $((9001 + 2 * i)) >"$RUN_DIR/asr_small_$i.log" 2>&1 &
-  CUDA_VISIBLE_DEVICES=0 "$PY" -m servers.asr_server --model large-v3 --port $((9002 + 2 * i)) >"$RUN_DIR/asr_large_$i.log" 2>&1 &
+  CUDA_VISIBLE_DEVICES=0 LD_LIBRARY_PATH="$ASR_LIBS:${LD_LIBRARY_PATH:-}" "$ASR_PY" -m servers.asr_server \
+    --model small --port $((9001 + 2 * i)) >"$RUN_DIR/asr_small_$i.log" 2>&1 &
+  CUDA_VISIBLE_DEVICES=0 LD_LIBRARY_PATH="$ASR_LIBS:${LD_LIBRARY_PATH:-}" "$ASR_PY" -m servers.asr_server \
+    --model large-v3 --port $((9002 + 2 * i)) >"$RUN_DIR/asr_large_$i.log" 2>&1 &
 done
 
 for i in 0 1 2; do
