@@ -32,7 +32,13 @@ if [ "$ROLE" = head ]; then
     sleep 5
   done
   echo "ray cluster has $gpus GPUs" >>"$RUN_DIR/ray_head.log"
-  exec "$VLLM_ENV/bin/vllm" serve "$LLM_TURBO" --port 8200 \
+  # The 405B AWQ checkpoint's generation_config.json stops only on <|end_of_text|> (128001), not on
+  # <|eot_id|> (128009), which ends every Llama 3 chat reply; without it the model keeps generating
+  # to max_tokens. Give vLLM a generation config with the same stop tokens as the 8B and 70B.
+  GEN_CFG=$RUN_DIR/turbo_generation_config
+  mkdir -p "$GEN_CFG"
+  echo '{"bos_token_id": 128000, "eos_token_id": [128001, 128008, 128009]}' >"$GEN_CFG/generation_config.json"
+  exec "$VLLM_ENV/bin/vllm" serve "$LLM_TURBO" --port 8200 --generation-config "$GEN_CFG" \
     --tensor-parallel-size "$TP" --pipeline-parallel-size "$PP" --distributed-executor-backend ray \
     --gpu-memory-utilization 0.90 --max-model-len 4096 >"$RUN_DIR/llm_turbo.log" 2>&1
 else

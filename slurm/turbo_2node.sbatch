@@ -35,12 +35,17 @@ echo "test request:"
 "$PY" - "http://$NODE3:8200" "$LLM_TURBO" <<'EOF'
 import sys, time, httpx
 url, model = sys.argv[1], sys.argv[2]
-body = {"model": model, "max_tokens": 60, "temperature": 0,
+body = {"model": model, "max_tokens": 200, "temperature": 0,
         "messages": [{"role": "user", "content": "In two sentences, what does warfarin do?"}]}
 t0 = time.perf_counter()
 r = httpx.post(f"{url}/v1/chat/completions", json=body, timeout=600)
 r.raise_for_status()
-print(f"  {time.perf_counter() - t0:.2f}s: {r.json()['choices'][0]['message']['content']!r}")
+choice = r.json()["choices"][0]
+print(f"  {time.perf_counter() - t0:.2f}s: {choice['message']['content']!r}")
+# "stop" means the model ended its reply; "length" means it ran into max_tokens (missing stop token)
+print(f"  finish_reason: {choice['finish_reason']}")
+if choice["finish_reason"] != "stop":
+    sys.exit("the 405B did not stop on its own: check its stop tokens (eos_token_id)")
 EOF
 
 echo "GPU memory per node (MiB used / total):"
