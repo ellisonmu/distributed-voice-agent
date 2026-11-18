@@ -22,11 +22,16 @@ for i in 0 1; do
 done
 
 for i in 0 1 2; do
-  gpu=$((1 + i))
-  CUDA_VISIBLE_DEVICES=$gpu "$PY" -m servers.tts_server --port $((9011 + i)) >"$RUN_DIR/tts_$i.log" 2>&1 &
   # 0.75 of the GPU for vLLM (8B weights ~16 GB + KV cache) leaves room for Kokoro on the same GPU.
-  CUDA_VISIBLE_DEVICES=$gpu "$VLLM" serve "$LLM_SMALL" --port $((8001 + i)) "${LORA_ARGS[@]}" \
+  CUDA_VISIBLE_DEVICES=$((1 + i)) "$VLLM" serve "$LLM_SMALL" --port $((8001 + i)) "${LORA_ARGS[@]}" \
     --gpu-memory-utilization 0.75 --max-model-len 8192 >"$RUN_DIR/llm_small_$i.log" 2>&1 &
+done
+
+# Kokoro starts only once the 8Bs are up: vLLM measures free GPU memory at startup to size its
+# KV cache, and another process loading onto the same GPU mid-measurement makes it abort.
+"$PY" -m voiceagent.health --url "http://$(hostname):8001" "http://$(hostname):8002" "http://$(hostname):8003" --timeout 1200
+for i in 0 1 2; do
+  CUDA_VISIBLE_DEVICES=$((1 + i)) "$PY" -m servers.tts_server --port $((9011 + i)) >"$RUN_DIR/tts_$i.log" 2>&1 &
 done
 
 wait
