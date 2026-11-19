@@ -751,12 +751,12 @@ and writing that part of the report. Commands are in the numbered steps above.
 2 Data ──────┼─► 3 Router dataset ─► 4 Router fine-tune ─┘
 ```
 
-**1. Cluster bring-up** (steps 1 and 3). Done when a short `run_16gpu.sbatch` finishes with
+**1. Cluster bring-up -- Ellison Murray** (steps 1 and 3). Done when a short `run_16gpu.sbatch` finishes with
 all three tiers answering.
-- [ ] Perlmutter envs; model downloads (8B, 70B AWQ, 405B AWQ ~203 GiB)
-- [ ] `smoke_1node.sbatch`: node 1 packing fits in memory, one caller completes a turn
-- [ ] `turbo_2node.sbatch`: 405B serves with TP=4 × PP=2; NCCL uses Slingshot, not sockets
-- [ ] `run_8gpu.sbatch`, then the first short `run_16gpu.sbatch`
+- [x] Perlmutter envs; model downloads (8B, 70B AWQ, 405B AWQ ~203 GiB)
+- [x] `smoke_1node.sbatch`: node 1 packing fits in memory, one caller completes a turn
+- [x] `turbo_2node.sbatch`: 405B serves with TP=4 × PP=2; NCCL uses Slingshot, not sockets
+- [x] `run_8gpu.sbatch`, then the first short `run_16gpu.sbatch`
 
 **2. Data and RAG — Thomas Wei** (step 2; [detailed plan](#task-2-data-and-rag)). Done when
 the reference splits, index and caller audio pass the documented checks and are shared.
